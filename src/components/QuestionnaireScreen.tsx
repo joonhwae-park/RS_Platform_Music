@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { QuestionnaireData } from '../types';
-import { CheckCircle, User, Globe, Briefcase, MessageSquare, Mail } from 'lucide-react';
+import { CheckCircle, User, MessageSquare, Mail } from 'lucide-react';
 
 interface QuestionnaireScreenProps {
   onComplete: (data: QuestionnaireData) => void;
@@ -8,165 +8,46 @@ interface QuestionnaireScreenProps {
 
 export const QuestionnaireScreen: React.FC<QuestionnaireScreenProps> = ({ onComplete }) => {
   const [formData, setFormData] = useState<QuestionnaireData>({
-    movieWatchingFrequency: '',
-    streamingServices: [],
-    primaryStreamingService: '',
-    movieGenrePreferences: [],
-    opennessToExperience: '',
-    riskAversion: '',
-    movieExpertise: '',
+    musicListeningFrequency: '',
+    musicGenrePreference: '',
+    musicExpertise: '',
     attentionCheck: '',
-    serendipityAttitude: '',
-    noveltyAttitude: '',
     diversityAttitude: '',
-    noveltyAttitude2: '',
     diversityAttitude2: '',
+    noveltyAttitude: '',
+    noveltyAttitude2: '',
+    serendipityAttitude: '',
     serendipityAttitude2: '',
     gender: '',
     ageRange: '',
-    nationality: '',
-    occupation: '',
     additionalComments: '',
     email: ''
   });
 
   const [errors, setErrors] = useState<string[]>([]);
 
-  const movieFrequencyOptions = [
-    '0-1',
-    '2-3',
-    '4-6',
-    '7-10',
-    'More than 10'
-  ];
-
+  const frequencyOptions = ['1', '2', '3', '4', '5', '6', '7'];
 
   const genreOptions = [
-    'Action',
-    'Adventure',
-    'Animation',
-    'Comedy',
-    'Drama',
-    'Horror',
-    'Romance',
-    'Science Fiction'
+    'Pop', 'Rock', 'Hip-Hop/Rap', 'R&B/Soul', 'Electronic/Dance',
+    'Classical', 'Jazz', 'Country', 'Metal', 'Indie/Alternative'
   ];
 
-  const ageRangeOptions = [
-    '18-24',
-    '25-34',
-    '35-44',
-    '45-54',
-    '55-64',
-    '65 or older'
-  ];
-
-  const opennessOptions = [
-    '1',
-    '2',
-    '3',
-    '4',
-    '5',
-    '6',
-    '7'
-  ];
-
-  const riskAversionOptions = [
-    '1',
-    '2',
-    '3',
-    '4',
-    '5',
-    '6',
-    '7'
-  ];
-
-  const expertiseOptions = [
-    '1',
-    '2',
-    '3',
-    '4',
-    '5',
-    '6',
-    '7'
-  ];
-
-  const attitudeOptions = [
-    '1',
-    '2',
-    '3',
-    '4',
-    '5',
-    '6',
-    '7'
-  ];
-
-  const handleStreamingServiceChange = (service: string, checked: boolean) => {
-    if (checked) {
-      setFormData(prev => ({
-        ...prev,
-        streamingServices: [...prev.streamingServices, service]
-      }));
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        streamingServices: prev.streamingServices.filter(s => s !== service)
-      }));
-    }
-  };
-
-  const handleGenreChange = (genre: string, checked: boolean) => {
-    // For single selection, replace the array with the selected genre
-    setFormData(prev => ({
-      ...prev,
-      movieGenrePreferences: checked ? [genre] : []
-    }));
-  };
+  const ageRangeOptions = ['18-24', '25-34', '35-44', '45-54', '55-64', '65 or older'];
+  const likertOptions = ['1', '2', '3', '4', '5', '6', '7'];
 
   const validateForm = () => {
     const newErrors: string[] = [];
-
-    if (!formData.movieWatchingFrequency) {
-      newErrors.push('Movie watching frequency is required');
-    }
-
-
-    if (formData.movieGenrePreferences.length === 0) {
-      newErrors.push('At least one movie genre preference is required');
-    }
-
-    if (!formData.movieExpertise) {
-      newErrors.push('Movie expertise question is required');
-    }
-
-    if (!formData.serendipityAttitude) {
-      newErrors.push('Serendipity attitude question is required');
-    }
-
-    if (!formData.noveltyAttitude) {
-      newErrors.push('Novelty attitude question is required');
-    }
-
-    if (!formData.diversityAttitude) {
-      newErrors.push('Diversity attitude question is required');
-    }
-
-    if (!formData.noveltyAttitude2) {
-      newErrors.push('Second novelty attitude question is required');
-    }
-
-    if (!formData.diversityAttitude2) {
-      newErrors.push('Second diversity attitude question is required');
-    }
-
-    if (!formData.serendipityAttitude2) {
-      newErrors.push('Second serendipity attitude question is required');
-    }
-
-    if (!formData.attentionCheck) {
-      newErrors.push('Please answer the attention check question');
-    }
-
+    if (!formData.musicListeningFrequency) newErrors.push('Music listening frequency is required');
+    if (!formData.musicGenrePreference) newErrors.push('Favorite music genre is required');
+    if (!formData.musicExpertise) newErrors.push('Music expertise question is required');
+    if (!formData.attentionCheck) newErrors.push('Please answer the attention check question');
+    if (!formData.diversityAttitude) newErrors.push('Diversity attitude question is required');
+    if (!formData.diversityAttitude2) newErrors.push('Second diversity question is required');
+    if (!formData.noveltyAttitude) newErrors.push('Novelty attitude question is required');
+    if (!formData.noveltyAttitude2) newErrors.push('Second novelty question is required');
+    if (!formData.serendipityAttitude) newErrors.push('Serendipity attitude question is required');
+    if (!formData.serendipityAttitude2) newErrors.push('Second serendipity question is required');
     setErrors(newErrors);
     return newErrors.length === 0;
   };
@@ -178,16 +59,34 @@ export const QuestionnaireScreen: React.FC<QuestionnaireScreenProps> = ({ onComp
     }
   };
 
+  const LikertScale = ({ name, value, onChange }: { name: string; value: string; onChange: (v: string) => void }) => (
+    <div className="grid grid-cols-7 gap-2">
+      {likertOptions.map(option => (
+        <label key={option} className="flex flex-col items-center">
+          <input
+            type="radio"
+            name={name}
+            value={option}
+            checked={value === option}
+            onChange={() => onChange(option)}
+            className="mb-1 text-teal-500 focus:ring-teal-500"
+          />
+          <span className="text-gray-300 text-sm">{option}</span>
+        </label>
+      ))}
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-gray-950 py-8 px-4">
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-amber-500 rounded-full mb-4">
-            <CheckCircle size={32} className="text-black" />
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-teal-500 rounded-full mb-4">
+            <CheckCircle size={32} className="text-white" />
           </div>
           <h1 className="text-3xl font-bold text-white mb-2">Final Questionnaire</h1>
           <p className="text-gray-300">
-            Please answer a few questions about your movie preferences and background
+            Please answer a few questions about your music preferences and background
           </p>
         </div>
 
@@ -196,55 +95,43 @@ export const QuestionnaireScreen: React.FC<QuestionnaireScreenProps> = ({ onComp
             <h3 className="text-red-400 font-semibold mb-2">Please complete the following required fields:</h3>
             <ul className="text-red-300 text-sm space-y-1">
               {errors.map((error, index) => (
-                <li key={index}>• {error}</li>
+                <li key={index}>- {error}</li>
               ))}
             </ul>
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-8">
-          {/* Mandatory Questions */}
           <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
             <h2 className="text-xl font-semibold text-white mb-6">Required Information</h2>
-            
-            {/* Movie Watching Frequency */}
+
+            {/* Music Listening Frequency */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
-                How many movies do you watch per month? *
+              <label className="block text-teal-400 font-medium mb-3">
+                How many days per week do you listen to music? (1 = rarely, 7 = every day) *
               </label>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {movieFrequencyOptions.map(option => (
-                  <label key={option} className="flex items-center">
-                    <input
-                      type="radio"
-                      name="movieFrequency"
-                      value={option}
-                      checked={formData.movieWatchingFrequency === option}
-                      onChange={(e) => setFormData(prev => ({ ...prev, movieWatchingFrequency: e.target.value }))}
-                      className="mr-3 text-amber-500 focus:ring-amber-500"
-                    />
-                    <span className="text-gray-300">{option}</span>
-                  </label>
-                ))}
-              </div>
+              <LikertScale
+                name="musicFrequency"
+                value={formData.musicListeningFrequency}
+                onChange={(v) => setFormData(prev => ({ ...prev, musicListeningFrequency: v }))}
+              />
             </div>
 
-
-            {/* Movie Genre Preferences */}
+            {/* Favorite Genre */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
-                What is your most favorite movie genre? (Select one) *
+              <label className="block text-teal-400 font-medium mb-3">
+                What is your most favorite music genre? (Select one) *
               </label>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 {genreOptions.map(genre => (
                   <label key={genre} className="flex items-center">
                     <input
                       type="radio"
-                      name="movieGenre"
+                      name="musicGenre"
                       value={genre}
-                      checked={formData.movieGenrePreferences.includes(genre)}
-                      onChange={(e) => handleGenreChange(genre, e.target.checked)}
-                      className="mr-3 text-amber-500 focus:ring-amber-500"
+                      checked={formData.musicGenrePreference === genre}
+                      onChange={() => setFormData(prev => ({ ...prev, musicGenrePreference: genre }))}
+                      className="mr-3 text-teal-500 focus:ring-teal-500"
                     />
                     <span className="text-gray-300">{genre}</span>
                   </label>
@@ -252,198 +139,116 @@ export const QuestionnaireScreen: React.FC<QuestionnaireScreenProps> = ({ onComp
               </div>
             </div>
 
-            {/* Movie Expertise */}
+            {/* Music Expertise */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
-                How knowledgeable are you about movies in general? (1-Not at all knowledgeable, 7-Extremely knowledgeable) *
+              <label className="block text-teal-400 font-medium mb-3">
+                How knowledgeable are you about music in general? (1 = Not at all, 7 = Extremely) *
               </label>
-              <div className="grid grid-cols-7 gap-2">
-                {expertiseOptions.map(option => (
-                  <label key={option} className="flex flex-col items-center">
-                    <input
-                      type="radio"
-                      name="movieExpertise"
-                      value={option}
-                      checked={formData.movieExpertise === option}
-                      onChange={(e) => setFormData(prev => ({ ...prev, movieExpertise: e.target.value }))}
-                      className="mb-1 text-amber-500 focus:ring-amber-500"
-                    />
-                    <span className="text-gray-300 text-sm">{option}</span>
-                  </label>
-                ))}
-              </div>
+              <LikertScale
+                name="musicExpertise"
+                value={formData.musicExpertise}
+                onChange={(v) => setFormData(prev => ({ ...prev, musicExpertise: v }))}
+              />
             </div>
 
             {/* Attention Check */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
+              <label className="block text-teal-400 font-medium mb-3">
                 To help us with the survey, please select "4" for this question. *
               </label>
-              <div className="grid grid-cols-7 gap-2">
-                {['1', '2', '3', '4', '5', '6', '7'].map(option => (
-                  <label key={option} className="flex flex-col items-center">
-                    <input
-                      type="radio"
-                      name="attentionCheck"
-                      value={option}
-                      checked={formData.attentionCheck === option}
-                      onChange={(e) => setFormData(prev => ({ ...prev, attentionCheck: e.target.value }))}
-                      className="mb-1 text-amber-500 focus:ring-amber-500"
-                    />
-                    <span className="text-gray-300 text-sm">{option}</span>
-                  </label>
-                ))}
-              </div>
+              <LikertScale
+                name="attentionCheck"
+                value={formData.attentionCheck}
+                onChange={(v) => setFormData(prev => ({ ...prev, attentionCheck: v }))}
+              />
             </div>
 
             {/* Diversity Attitude */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
-                I often prefer watching similar movies. (1-Strongly disagree, 7-Strongly agree) *
+              <label className="block text-teal-400 font-medium mb-3">
+                I often prefer listening to similar types of music. (1 = Strongly disagree, 7 = Strongly agree) *
               </label>
-              <div className="grid grid-cols-7 gap-2">
-                {opennessOptions.map(option => (
-                  <label key={option} className="flex flex-col items-center">
-                    <input
-                      type="radio"
-                      name="diversityAttitude"
-                      value={option}
-                      checked={formData.diversityAttitude === option}
-                      onChange={(e) => setFormData(prev => ({ ...prev, diversityAttitude: e.target.value }))}
-                      className="mb-1 text-amber-500 focus:ring-amber-500"
-                    />
-                    <span className="text-gray-300 text-sm">{option}</span>
-                  </label>
-                ))}
-              </div>
+              <LikertScale
+                name="diversityAttitude"
+                value={formData.diversityAttitude}
+                onChange={(v) => setFormData(prev => ({ ...prev, diversityAttitude: v }))}
+              />
             </div>
 
-            {/* Diversity Attitude */}
+            {/* Diversity Attitude 2 */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
-                Compared to my peers, I watch more diverse movies. (1-Strongly disagree, 7-Strongly agree) *
+              <label className="block text-teal-400 font-medium mb-3">
+                Compared to my peers, I listen to more diverse music. (1 = Strongly disagree, 7 = Strongly agree) *
               </label>
-              <div className="grid grid-cols-7 gap-2">
-                {riskAversionOptions.map(option => (
-                  <label key={option} className="flex flex-col items-center">
-                    <input
-                      type="radio"
-                      name="diversityAttitude2"
-                      value={option}
-                      checked={formData.diversityAttitude2 === option}
-                      onChange={(e) => setFormData(prev => ({ ...prev, diversityAttitude2: e.target.value }))}
-                      className="mb-1 text-amber-500 focus:ring-amber-500"
-                    />
-                    <span className="text-gray-300 text-sm">{option}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-
-            {/* Novelty Attitude */}
-            <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
-                I often prefer watching novel movies. (1-Strongly disagree, 7-Strongly agree) *
-              </label>
-              <div className="grid grid-cols-7 gap-2">
-                {attitudeOptions.map(option => (
-                  <label key={option} className="flex flex-col items-center">
-                    <input
-                      type="radio"
-                      name="noveltyAttitude"
-                      value={option}
-                      checked={formData.noveltyAttitude === option}
-                      onChange={(e) => setFormData(prev => ({ ...prev, noveltyAttitude: e.target.value }))}
-                      className="mb-1 text-amber-500 focus:ring-amber-500"
-                    />
-                    <span className="text-gray-300 text-sm">{option}</span>
-                  </label>
-                ))}
-              </div>
+              <LikertScale
+                name="diversityAttitude2"
+                value={formData.diversityAttitude2}
+                onChange={(v) => setFormData(prev => ({ ...prev, diversityAttitude2: v }))}
+              />
             </div>
 
             {/* Novelty Attitude */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
-                Compared to my peers, I often watch conventional movies. (1-Strongly disagree, 7-Strongly agree) *
+              <label className="block text-teal-400 font-medium mb-3">
+                I often prefer listening to new music. (1 = Strongly disagree, 7 = Strongly agree) *
               </label>
-              <div className="grid grid-cols-7 gap-2">
-                {attitudeOptions.map(option => (
-                  <label key={option} className="flex flex-col items-center">
-                    <input
-                      type="radio"
-                      name="noveltyAttitude2"
-                      value={option}
-                      checked={formData.noveltyAttitude2 === option}
-                      onChange={(e) => setFormData(prev => ({ ...prev, noveltyAttitude2: e.target.value }))}
-                      className="mb-1 text-amber-500 focus:ring-amber-500"
-                    />
-                    <span className="text-gray-300 text-sm">{option}</span>
-                  </label>
-                ))}
-              </div>
+              <LikertScale
+                name="noveltyAttitude"
+                value={formData.noveltyAttitude}
+                onChange={(v) => setFormData(prev => ({ ...prev, noveltyAttitude: v }))}
+              />
+            </div>
+
+            {/* Novelty Attitude 2 */}
+            <div className="mb-6">
+              <label className="block text-teal-400 font-medium mb-3">
+                Compared to my peers, I often listen to more conventional music. (1 = Strongly disagree, 7 = Strongly agree) *
+              </label>
+              <LikertScale
+                name="noveltyAttitude2"
+                value={formData.noveltyAttitude2}
+                onChange={(v) => setFormData(prev => ({ ...prev, noveltyAttitude2: v }))}
+              />
             </div>
 
             {/* Serendipity Attitude */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
-                I often prefer watching unexpected movies. (1-Strongly disagree, 7-Strongly agree) *
+              <label className="block text-teal-400 font-medium mb-3">
+                I often prefer listening to music that surprises me. (1 = Strongly disagree, 7 = Strongly agree) *
               </label>
-              <div className="grid grid-cols-7 gap-2">
-                {attitudeOptions.map(option => (
-                  <label key={option} className="flex flex-col items-center">
-                    <input
-                      type="radio"
-                      name="serendipityAttitude"
-                      value={option}
-                      checked={formData.serendipityAttitude === option}
-                      onChange={(e) => setFormData(prev => ({ ...prev, serendipityAttitude: e.target.value }))}
-                      className="mb-1 text-amber-500 focus:ring-amber-500"
-                    />
-                    <span className="text-gray-300 text-sm">{option}</span>
-                  </label>
-                ))}
-              </div>
+              <LikertScale
+                name="serendipityAttitude"
+                value={formData.serendipityAttitude}
+                onChange={(v) => setFormData(prev => ({ ...prev, serendipityAttitude: v }))}
+              />
             </div>
 
-            {/* Serendipity Attitude */}
+            {/* Serendipity Attitude 2 */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">
-                Compared to my peers, I often watch movies that are easier to discover. (1-Strongly disagree, 7-Strongly agree) *
+              <label className="block text-teal-400 font-medium mb-3">
+                Compared to my peers, I often listen to music that are easier to discover. (1 = Strongly disagree, 7 = Strongly agree) *
               </label>
-              <div className="grid grid-cols-7 gap-2">
-                {attitudeOptions.map(option => (
-                  <label key={option} className="flex flex-col items-center">
-                    <input
-                      type="radio"
-                     name="serendipityAttitude2"
-                      value={option}
-                     checked={formData.serendipityAttitude2 === option}
-                     onChange={(e) => setFormData(prev => ({ ...prev, serendipityAttitude2: e.target.value }))}
-                      className="mb-1 text-amber-500 focus:ring-amber-500"
-                    />
-                    <span className="text-gray-300 text-sm">{option}</span>
-                  </label>
-                ))}
-              </div>
+              <LikertScale
+                name="serendipityAttitude2"
+                value={formData.serendipityAttitude2}
+                onChange={(v) => setFormData(prev => ({ ...prev, serendipityAttitude2: v }))}
+              />
             </div>
           </div>
 
-          {/* Optional Questions */}
+          {/* Optional Information */}
           <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
             <h2 className="text-xl font-semibold text-white mb-6 flex items-center">
               <User className="mr-2" size={24} />
               Optional Information
             </h2>
-            
-            {/* Gender */}
+
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">Gender (Optional)</label>
+              <label className="block text-teal-400 font-medium mb-3">Gender (Optional)</label>
               <select
                 value={formData.gender || ''}
                 onChange={(e) => setFormData(prev => ({ ...prev, gender: e.target.value }))}
-                className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500"
               >
                 <option value="">Select</option>
                 <option value="Male">Male</option>
@@ -454,13 +259,12 @@ export const QuestionnaireScreen: React.FC<QuestionnaireScreenProps> = ({ onComp
               </select>
             </div>
 
-            {/* Age Range */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3">Age Range (Optional)</label>
+              <label className="block text-teal-400 font-medium mb-3">Age Range (Optional)</label>
               <select
                 value={formData.ageRange || ''}
                 onChange={(e) => setFormData(prev => ({ ...prev, ageRange: e.target.value }))}
-                className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500"
               >
                 <option value="">Select age range</option>
                 {ageRangeOptions.map(range => (
@@ -469,37 +273,31 @@ export const QuestionnaireScreen: React.FC<QuestionnaireScreenProps> = ({ onComp
               </select>
             </div>
 
-
-            {/* Email for Lottery */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3 flex items-center">
+              <label className="block text-teal-400 font-medium mb-3 flex items-center">
                 <Mail className="mr-2" size={20} />
-                Email Address for Lottery Participation (Optional)
+                Email Address (Optional)
               </label>
               <input
                 type="email"
                 value={formData.email || ''}
                 onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                placeholder="Enter your email address to participate in the lottery"
-                className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                placeholder="Enter your email address"
+                className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
-              <p className="text-gray-400 text-sm mt-2">
-                If you provide your email, you'll be eligible for the lottery to win a video-on-demand (VOD) rental of your highest-rated recommended movie.
-              </p>
             </div>
 
-            {/* Additional Comments */}
             <div className="mb-6">
-              <label className="block text-amber-400 font-medium mb-3 flex items-center">
+              <label className="block text-teal-400 font-medium mb-3 flex items-center">
                 <MessageSquare className="mr-2" size={20} />
                 Additional Comments (Optional)
               </label>
               <textarea
                 value={formData.additionalComments || ''}
                 onChange={(e) => setFormData(prev => ({ ...prev, additionalComments: e.target.value }))}
-                placeholder="Any additional thoughts about the study or your movie preferences..."
+                placeholder="Any additional thoughts about the study..."
                 rows={4}
-                className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-amber-500 resize-vertical"
+                className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-vertical"
               />
             </div>
           </div>
@@ -507,7 +305,7 @@ export const QuestionnaireScreen: React.FC<QuestionnaireScreenProps> = ({ onComp
           <div className="text-center">
             <button
               type="submit"
-              className="bg-amber-500 hover:bg-amber-600 text-black font-bold py-4 px-8 rounded-xl transition-all duration-300 transform hover:scale-105 shadow-lg text-lg"
+              className="bg-teal-500 hover:bg-teal-600 text-white font-bold py-4 px-8 rounded-xl transition-all duration-300 transform hover:scale-105 shadow-lg text-lg"
             >
               Complete Study
             </button>

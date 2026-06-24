@@ -1,70 +1,44 @@
-export interface Movie {
-  id: string;
-  title: string;
-  description: string;
-  poster: string;
-  trailer: string;
-  genre: string;
-  year: number;
-  director: string;
-  actors: string;
+export interface Song {
+  spotify_track_id: string;
+  song: string;
+  artist: string;
+  album_name: string;
+  is_attention_check: boolean;
+  audioUrl: string;
+  imageUrl: string;
 }
 
 export interface Rating {
-  movieId: string;
-  rating: number;
-  diversity?: number;
+  trackId: string;
+  rating: number; // 1 = like, 0 = dislike, -1 = unrated
+  diversity?: number; // 1 = yes, 0 = no, -1 = unanswered
   novelty?: number;
   serendipity?: number;
+  listenedDuration?: number;
 }
 
 export interface QuestionnaireData {
-  movieWatchingFrequency: string;
-  streamingServices: string[];
-  primaryStreamingService: string;
-  movieGenrePreferences: string[];
-  opennessToExperience: string;
-  riskAversion: string;
-  movieExpertise: string;
   gender?: string;
   ageRange?: string;
+  musicListeningFrequency: string;
+  musicGenrePreference: string;
+  musicExpertise: string;
   attentionCheck: string;
-  serendipityAttitude: string;
-  noveltyAttitude: string;
   diversityAttitude: string;
-  noveltyAttitude2: string;
   diversityAttitude2: string;
+  noveltyAttitude: string;
+  noveltyAttitude2: string;
+  serendipityAttitude: string;
   serendipityAttitude2: string;
-  nationality?: string;
-  occupation?: string;
   additionalComments?: string;
   email?: string;
 }
 
-export interface PhaseTransition {
-  sessionId: string;
-  fromPhase: string;
-  toPhase: string;
-  timestamp: string;
-}
-
-export interface TrailerView {
-  sessionId: string;
-  movieId: string;
-  startTime: string;
-  endTime?: string;
-  duration?: number;
-}
-
-export interface SessionData {
-  userId: string;
-  phase: 'initial' | 'recommendation';
-  startTime: number;
-  endTime?: number;
-  ratings: Rating[];
-  minimumRatingsRequired: number;
-  screenWidth?: number;
-  screenHeight?: number;
+export interface Phase2Song extends Song {
+  model: string;
+  rank: number;
+  batch: number;
+  displayOrder: number;
 }
 
 export type AppPhase = 'intro' | 'initial' | 'choice' | 'recommendation' | 'questionnaire' | 'complete';

@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle, Edit, ArrowRight } from 'lucide-react';
+import { CheckCircle, CreditCard as Edit, ArrowRight } from 'lucide-react';
 
 interface Phase2CompletionModalProps {
   isOpen: boolean;
@@ -21,16 +21,16 @@ export const Phase2CompletionModal: React.FC<Phase2CompletionModalProps> = ({
           <div className="inline-flex items-center justify-center w-16 h-16 bg-green-500 rounded-full mb-6">
             <CheckCircle size={32} className="text-white" />
           </div>
-          
+
           <h2 className="text-2xl font-bold text-white mb-4">
             Phase 2 Complete!
           </h2>
-          
+
           <p className="text-gray-300 mb-8">
-            You have successfully rated all recommended movies and answered the additional questions. 
+            You have successfully rated all recommended songs and answered the additional questions.
             You can now finish the study or modify your ratings if needed.
           </p>
-          
+
           <div className="space-y-4">
             <button
               onClick={onModifyRatings}
@@ -39,10 +39,10 @@ export const Phase2CompletionModal: React.FC<Phase2CompletionModalProps> = ({
               <Edit size={20} />
               Modify Ratings
             </button>
-            
+
             <button
               onClick={onFinish}
-              className="w-full bg-amber-500 hover:bg-amber-600 text-black font-semibold py-3 px-6 rounded-lg transition-all duration-300 transform hover:scale-105 shadow-lg flex items-center justify-center gap-2"
+              className="w-full bg-teal-500 hover:bg-teal-600 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-300 transform hover:scale-105 shadow-lg flex items-center justify-center gap-2"
             >
               Finish Study
               <ArrowRight size={20} />
