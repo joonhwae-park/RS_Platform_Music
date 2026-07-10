@@ -119,42 +119,90 @@ function App() {
     setLoadingSongs(true);
     setErrorMsg(null);
     try {
-      // Check if songs already selected for this session
+      // Check if songs were already selected for this session
       const { data: existing } = await supabase
         .from('session_phase1_songs')
         .select('spotify_track_id, is_attention_check, position')
         .eq('session_id', sid)
         .order('position', { ascending: true });
 
-      let songList: { spotify_track_id: string; is_attention_check: boolean }[];
+      let audioRows: { spotify_track_id: string; song: string; artist: string; album_name: string }[];
 
       if (existing && existing.length > 0) {
-        songList = existing;
-      } else {
-        // Call the function to select Phase 1 songs
-        const { data, error } = await supabase.rpc('select_phase1_songs_for_session', { p_session_id: sid });
-        if (error) throw error;
-        // Map RPC return columns (track_id, is_attention) to our expected shape
-        songList = (data || []).map((row: { track_id: string; is_attention: boolean }) => ({
-          spotify_track_id: row.track_id,
-          is_attention_check: row.is_attention,
-        }));
+        // Session already has songs selected -- fetch metadata for them
+        const realIds = existing.filter(e => !e.is_attention_check).map(e => e.spotify_track_id);
+        const { data: meta, error: metaErr } = await supabase
+          .from('audio_list')
+          .select('spotify_track_id, song, artist, album_name')
+          .in('spotify_track_id', realIds);
+        if (metaErr) throw metaErr;
+
+        const metaMap = new Map((meta || []).map(m => [m.spotify_track_id, m]));
+        const songs: Song[] = existing.map(item => {
+          if (item.is_attention_check) {
+            return {
+              spotify_track_id: 'attention_check',
+              song: 'Attention Check',
+              artist: 'Please do not rate this',
+              album_name: '',
+              is_attention_check: true,
+              audioUrl: getAudioUrl('attention_check'),
+              imageUrl: getAlbumImageUrl('attention_check'),
+            };
+          }
+          const m = metaMap.get(item.spotify_track_id);
+          return {
+            spotify_track_id: item.spotify_track_id,
+            song: m?.song || 'Unknown',
+            artist: m?.artist || 'Unknown',
+            album_name: m?.album_name || '',
+            is_attention_check: false,
+            audioUrl: getAudioUrl(item.spotify_track_id),
+            imageUrl: getAlbumImageUrl(item.spotify_track_id),
+          };
+        });
+        setCurrentSongs(songs);
+        return;
       }
 
-      // Fetch song metadata from audio_list for non-attention-check songs
-      const realTrackIds = songList.filter(s => !s.is_attention_check).map(s => s.spotify_track_id);
-      const { data: audioData, error: audioError } = await supabase
+      // Fresh selection: fetch all songs from audio_list and sample 20 weighted by rating_count
+      const { data: allSongs, error: fetchErr } = await supabase
         .from('audio_list')
-        .select('spotify_track_id, song, artist, album_name')
-        .in('spotify_track_id', realTrackIds);
+        .select('spotify_track_id, song, artist, album_name, rating_count');
+      if (fetchErr) throw fetchErr;
+      if (!allSongs || allSongs.length === 0) {
+        setErrorMsg('No songs available in the catalog.');
+        return;
+      }
 
-      if (audioError) throw audioError;
+      // Weighted random sampling: probability proportional to rating_count
+      const selected: typeof allSongs = [];
+      const pool = [...allSongs];
+      const sampleSize = Math.min(20, pool.length);
 
-      const audioMap = new Map(audioData?.map(a => [a.spotify_track_id, a]) || []);
+      for (let i = 0; i < sampleSize; i++) {
+        const totalWeight = pool.reduce((sum, s) => sum + (s.rating_count || 1), 0);
+        let r = Math.random() * totalWeight;
+        let idx = 0;
+        for (let j = 0; j < pool.length; j++) {
+          r -= (pool[j].rating_count || 1);
+          if (r <= 0) { idx = j; break; }
+        }
+        selected.push(pool[idx]);
+        pool.splice(idx, 1);
+      }
 
-      const songs: Song[] = songList.map(item => {
-        if (item.is_attention_check) {
-          return {
+      // Insert attention check at a random position between index 5 and 16
+      const attentionPos = 5 + Math.floor(Math.random() * Math.min(12, selected.length - 4));
+
+      // Build the final song list with attention check inserted
+      const songs: Song[] = [];
+      const recordsToInsert: { session_id: string; spotify_track_id: string; position: number; is_attention_check: boolean }[] = [];
+      let position = 1;
+
+      for (let i = 0; i < selected.length; i++) {
+        if (i === attentionPos) {
+          songs.push({
             spotify_track_id: 'attention_check',
             song: 'Attention Check',
             artist: 'Please do not rate this',
@@ -162,19 +210,43 @@ function App() {
             is_attention_check: true,
             audioUrl: getAudioUrl('attention_check'),
             imageUrl: getAlbumImageUrl('attention_check'),
-          };
+          });
+          recordsToInsert.push({ session_id: sid, spotify_track_id: 'attention_check', position, is_attention_check: true });
+          position++;
         }
-        const meta = audioMap.get(item.spotify_track_id);
-        return {
-          spotify_track_id: item.spotify_track_id,
-          song: meta?.song || 'Unknown',
-          artist: meta?.artist || 'Unknown',
-          album_name: meta?.album_name || '',
+
+        const s = selected[i];
+        songs.push({
+          spotify_track_id: s.spotify_track_id,
+          song: s.song,
+          artist: s.artist,
+          album_name: s.album_name,
           is_attention_check: false,
-          audioUrl: getAudioUrl(item.spotify_track_id),
-          imageUrl: getAlbumImageUrl(item.spotify_track_id),
-        };
-      });
+          audioUrl: getAudioUrl(s.spotify_track_id),
+          imageUrl: getAlbumImageUrl(s.spotify_track_id),
+        });
+        recordsToInsert.push({ session_id: sid, spotify_track_id: s.spotify_track_id, position, is_attention_check: false });
+        position++;
+      }
+
+      // If attention check wasn't inserted yet (edge case), append at end
+      if (!songs.some(s => s.is_attention_check)) {
+        songs.push({
+          spotify_track_id: 'attention_check',
+          song: 'Attention Check',
+          artist: 'Please do not rate this',
+          album_name: '',
+          is_attention_check: true,
+          audioUrl: getAudioUrl('attention_check'),
+          imageUrl: getAlbumImageUrl('attention_check'),
+        });
+        recordsToInsert.push({ session_id: sid, spotify_track_id: 'attention_check', position, is_attention_check: true });
+      }
+
+      // Persist selection for session recovery
+      if (!sid.startsWith('local_')) {
+        await supabase.from('session_phase1_songs').insert(recordsToInsert);
+      }
 
       setCurrentSongs(songs);
     } catch (error: any) {
