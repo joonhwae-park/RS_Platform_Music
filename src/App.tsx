@@ -126,14 +126,12 @@ function App() {
         .eq('session_id', sid)
         .order('position', { ascending: true });
 
-      let audioRows: { spotify_track_id: string; song: string; artist: string; album_name: string }[];
-
       if (existing && existing.length > 0) {
         // Session already has songs selected -- fetch metadata for them
         const realIds = existing.filter(e => !e.is_attention_check).map(e => e.spotify_track_id);
         const { data: meta, error: metaErr } = await supabase
           .from('audio_list')
-          .select('spotify_track_id, song, artist, album_name')
+          .select('spotify_track_id, music4all_id, song, artist, album_name')
           .in('spotify_track_id', realIds);
         if (metaErr) throw metaErr;
 
@@ -142,6 +140,7 @@ function App() {
           if (item.is_attention_check) {
             return {
               spotify_track_id: 'attention_check',
+              music4all_id: 'attention_check',
               song: 'Attention Check',
               artist: 'Please do not rate this',
               album_name: '',
@@ -153,12 +152,13 @@ function App() {
           const m = metaMap.get(item.spotify_track_id);
           return {
             spotify_track_id: item.spotify_track_id,
+            music4all_id: m?.music4all_id || '',
             song: m?.song || 'Unknown',
             artist: m?.artist || 'Unknown',
             album_name: m?.album_name || '',
             is_attention_check: false,
-            audioUrl: getAudioUrl(item.spotify_track_id),
-            imageUrl: getAlbumImageUrl(item.spotify_track_id),
+            audioUrl: getAudioUrl(m?.music4all_id || ''),
+            imageUrl: getAlbumImageUrl(m?.music4all_id || ''),
           };
         });
         setCurrentSongs(songs);
@@ -168,7 +168,7 @@ function App() {
       // Fresh selection: fetch all songs from audio_list and sample 20 weighted by rating_count
       const { data: allSongs, error: fetchErr } = await supabase
         .from('audio_list')
-        .select('spotify_track_id, song, artist, album_name, rating_count');
+        .select('spotify_track_id, music4all_id, song, artist, album_name, rating_count');
       if (fetchErr) throw fetchErr;
       if (!allSongs || allSongs.length === 0) {
         setErrorMsg('No songs available in the catalog.');
@@ -204,6 +204,7 @@ function App() {
         if (i === attentionPos) {
           songs.push({
             spotify_track_id: 'attention_check',
+            music4all_id: 'attention_check',
             song: 'Attention Check',
             artist: 'Please do not rate this',
             album_name: '',
@@ -218,12 +219,13 @@ function App() {
         const s = selected[i];
         songs.push({
           spotify_track_id: s.spotify_track_id,
+          music4all_id: s.music4all_id,
           song: s.song,
           artist: s.artist,
           album_name: s.album_name,
           is_attention_check: false,
-          audioUrl: getAudioUrl(s.spotify_track_id),
-          imageUrl: getAlbumImageUrl(s.spotify_track_id),
+          audioUrl: getAudioUrl(s.music4all_id),
+          imageUrl: getAlbumImageUrl(s.music4all_id),
         });
         recordsToInsert.push({ session_id: sid, spotify_track_id: s.spotify_track_id, position, is_attention_check: false });
         position++;
@@ -233,6 +235,7 @@ function App() {
       if (!songs.some(s => s.is_attention_check)) {
         songs.push({
           spotify_track_id: 'attention_check',
+          music4all_id: 'attention_check',
           song: 'Attention Check',
           artist: 'Please do not rate this',
           album_name: '',
@@ -276,7 +279,7 @@ function App() {
       const realTrackIds = recs.filter(r => !r.is_attention_check).map(r => r.spotify_track_id);
       const { data: audioData } = await supabase
         .from('audio_list')
-        .select('spotify_track_id, song, artist, album_name')
+        .select('spotify_track_id, music4all_id, song, artist, album_name')
         .in('spotify_track_id', realTrackIds);
 
       const audioMap = new Map(audioData?.map(a => [a.spotify_track_id, a]) || []);
@@ -285,6 +288,7 @@ function App() {
         if (rec.is_attention_check) {
           return {
             spotify_track_id: 'attention_check_p2',
+            music4all_id: 'attention_check',
             song: 'Attention Check',
             artist: 'Please do not rate this',
             album_name: '',
@@ -300,12 +304,13 @@ function App() {
         const meta = audioMap.get(rec.spotify_track_id);
         return {
           spotify_track_id: rec.spotify_track_id,
+          music4all_id: meta?.music4all_id || '',
           song: meta?.song || 'Unknown',
           artist: meta?.artist || 'Unknown',
           album_name: meta?.album_name || '',
           is_attention_check: false,
-          audioUrl: getAudioUrl(rec.spotify_track_id),
-          imageUrl: getAlbumImageUrl(rec.spotify_track_id),
+          audioUrl: getAudioUrl(meta?.music4all_id || ''),
+          imageUrl: getAlbumImageUrl(meta?.music4all_id || ''),
           model: rec.model,
           rank: rec.rank,
           batch: rec.batch,

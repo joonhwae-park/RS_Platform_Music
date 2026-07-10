@@ -102,7 +102,6 @@ export const SongCard: React.FC<SongCardProps> = ({
   };
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const listenProgressPercent = Math.min((totalListened / MINIMUM_LISTEN_TIME) * 100, 100);
 
   return (
     <div className={`bg-gray-900 rounded-xl overflow-hidden shadow-2xl border transition-all duration-300 flex flex-col h-full ${
@@ -155,15 +154,9 @@ export const SongCard: React.FC<SongCardProps> = ({
           {/* Listen progress indicator */}
           {!hasListened15s && (
             <div className="mt-2">
-              <div className="flex justify-between text-xs text-gray-500 mb-1">
+              <div className="flex justify-between text-xs text-gray-500">
                 <span>Listen at least 15s to rate</span>
                 <span>{Math.floor(totalListened)}s / {MINIMUM_LISTEN_TIME}s</span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-1">
-                <div
-                  className="bg-amber-500 h-1 rounded-full transition-all duration-300"
-                  style={{ width: `${listenProgressPercent}%` }}
-                />
               </div>
             </div>
           )}

@@ -1,5 +1,6 @@
 export interface Song {
   spotify_track_id: string;
+  music4all_id: string;
   song: string;
   artist: string;
   album_name: string;

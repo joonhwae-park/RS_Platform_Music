@@ -15,8 +15,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   }
 });
 
-export const getAudioUrl = (spotifyTrackId: string) =>
-  `${supabaseUrl}/storage/v1/object/public/audio_preview/${spotifyTrackId}.mp3`;
+export const getAudioUrl = (music4allId: string) =>
+  `${supabaseUrl}/storage/v1/object/public/audio_preview/${music4allId}.mp3`;
 
-export const getAlbumImageUrl = (spotifyTrackId: string) =>
-  `${supabaseUrl}/storage/v1/object/public/album_image/${spotifyTrackId}.jpg`;
+export const getAlbumImageUrl = (music4allId: string) =>
+  `${supabaseUrl}/storage/v1/object/public/album_image/${music4allId}.jpg`;
