@@ -1,0 +1,1 @@
+CREATE POLICY "select_audio_list" ON audio_list FOR SELECT TO anon, authenticated USING (true);
