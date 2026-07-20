@@ -191,6 +191,12 @@ function App() {
 
       const selected = strata.flatMap(s => weightedSample(s.pool, s.target));
 
+      // Shuffle display order (Fisher-Yates)
+      for (let i = selected.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [selected[i], selected[j]] = [selected[j], selected[i]];
+      }
+
       const songs: Song[] = [];
       const recordsToInsert: { session_id: string; spotify_track_id: string; position: number }[] = [];
 
