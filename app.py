@@ -511,17 +511,22 @@ def recommend(req: RecReq, x_webhook_secret: Optional[str] = Header(None)):
         n_displayed = sum(1 for r in (tallrec_rows + knn_rows) if r.get("display_order") is not None)
         logger.info(f"Assigned display_order to {n_displayed} tracks")
 
-        # 6) Persist
+        # 6) Persist — displayed rows only.
+        # music_recommendations.display_order is NOT NULL, and the frontend
+        # (App.tsx loadPhase2Songs) renders every stored row for the session,
+        # so the internal top-20 pools must not be written to the table.
         logger.info("Step 6: Saving recommendations to database")
-        if tallrec_rows:
-            upsert_rows(tallrec_rows)
-        upsert_rows(knn_rows)
+        tallrec_saved = [r for r in tallrec_rows if r.get("display_order") is not None]
+        knn_saved = [r for r in knn_rows if r.get("display_order") is not None]
+        if tallrec_saved:
+            upsert_rows(tallrec_saved)
+        upsert_rows(knn_saved)
 
         result = {
             "session_id": req.session_id,
             "batch": req.batch,
-            "tallrec_saved": len(tallrec_rows),
-            "knn_saved": len(knn_rows),
+            "tallrec_saved": len(tallrec_saved),
+            "knn_saved": len(knn_saved),
             "displayed": n_displayed,
             "display_sequence": display_seq,
             "timing": {"knn_secs": round(knn_secs, 2), "tallrec_secs": round(tallrec_secs, 2)},
