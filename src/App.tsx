@@ -153,32 +153,43 @@ function App() {
         return;
       }
 
-      // Fresh selection: fetch all songs from audio_list and sample 20 weighted by rating_count
+      // Fresh selection: fetch all songs from audio_list and stratified-sample 20 by release decade
       const { data: allSongs, error: fetchErr } = await supabase
         .from('audio_list')
-        .select('spotify_track_id, music4all_id, song, artist, album_name, rating_count');
+        .select('spotify_track_id, music4all_id, song, artist, album_name, rating_count, release');
       if (fetchErr) throw fetchErr;
       if (!allSongs || allSongs.length === 0) {
         setErrorMsg('No songs available in the catalog.');
         return;
       }
 
-      // Weighted random sampling: probability proportional to rating_count
-      const selected: typeof allSongs = [];
-      const pool = [...allSongs];
-      const sampleSize = Math.min(20, pool.length);
+      // Stratify by release year
+      const strata: { pool: typeof allSongs; target: number }[] = [
+        { pool: allSongs.filter(s => (s.release ?? 0) >= 2010), target: 6 },
+        { pool: allSongs.filter(s => (s.release ?? 0) >= 2000 && (s.release ?? 0) <= 2009), target: 6 },
+        { pool: allSongs.filter(s => (s.release ?? 0) >= 1990 && (s.release ?? 0) <= 1999), target: 5 },
+        { pool: allSongs.filter(s => (s.release ?? 0) <= 1989), target: 3 },
+      ];
 
-      for (let i = 0; i < sampleSize; i++) {
-        const totalWeight = pool.reduce((sum, s) => sum + (s.rating_count || 1), 0);
-        let r = Math.random() * totalWeight;
-        let idx = 0;
-        for (let j = 0; j < pool.length; j++) {
-          r -= (pool[j].rating_count || 1);
-          if (r <= 0) { idx = j; break; }
+      const weightedSample = (pool: typeof allSongs, n: number) => {
+        const result: typeof allSongs = [];
+        const remaining = [...pool];
+        const count = Math.min(n, remaining.length);
+        for (let i = 0; i < count; i++) {
+          const totalWeight = remaining.reduce((sum, s) => sum + (s.rating_count || 1), 0);
+          let r = Math.random() * totalWeight;
+          let idx = 0;
+          for (let j = 0; j < remaining.length; j++) {
+            r -= (remaining[j].rating_count || 1);
+            if (r <= 0) { idx = j; break; }
+          }
+          result.push(remaining[idx]);
+          remaining.splice(idx, 1);
         }
-        selected.push(pool[idx]);
-        pool.splice(idx, 1);
-      }
+        return result;
+      };
+
+      const selected = strata.flatMap(s => weightedSample(s.pool, s.target));
 
       const songs: Song[] = [];
       const recordsToInsert: { session_id: string; spotify_track_id: string; position: number }[] = [];
