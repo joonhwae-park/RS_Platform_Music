@@ -1,0 +1,26 @@
+# Serving environment for the TALLRec + item-kNN recommendation API.
+# torch / accelerate / bitsandbytes / peft are installed in the Dockerfile
+# AFTER this env is created, because their pip resolution depends on the
+# CUDA-specific torch wheel (cu118) that must be installed first.
+name: tallrec
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      # --- numerics (numpy<2 required by the pinned ML stack) ---
+      - numpy==1.26.4
+      - pandas==2.2.3
+      - scipy==1.11.4
+      # --- TALLRec inference stack (matches the validated training env) ---
+      - transformers==4.28.0
+      - sentencepiece==0.1.99
+      - protobuf==3.20.3
+      - huggingface-hub==0.20.3
+      # --- item-kNN: manual npz load needs only scipy; implicit is the fallback loader ---
+      - implicit==0.7.3
+      # --- API server ---
+      - fastapi
+      - uvicorn[standard]
+      - supabase
