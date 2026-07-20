@@ -2,42 +2,48 @@ FROM mambaorg/micromamba:1.5.8
 USER root
 
 RUN apt-get update && apt-get install -y \
-    git build-essential cmake ffmpeg && \
+    git build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-COPY p5.yml /tmp/p5.yml
-RUN sed -i '/^prefix:/d' /tmp/p5.yml
+COPY tallrec.yml /tmp/tallrec.yml
+RUN sed -i '/^prefix:/d' /tmp/tallrec.yml
 
-# p5 yml 
-RUN micromamba create -y -n p5 -f /tmp/p5.yml && \
+RUN micromamba create -y -n tallrec -f /tmp/tallrec.yml && \
     micromamba clean -a -y
 
 ENV MAMBA_DOCKERFILE_ACTIVATE=1
 SHELL ["/bin/bash", "-lc"]
 
-RUN micromamba run -n p5 python -m pip install --upgrade pip && \
-    micromamba run -n p5 pip install \
-      --index-url https://download.pytorch.org/whl/cu117 \
-      torch==2.0.1+cu117 torchvision==0.15.2+cu117
+# torch first (CUDA 11.8 wheel: native sm_89 kernels for the L4 GPU),
+# then the torch-dependent packages, pinned to the combo validated during
+# TALLRec training/evaluation (transformers 4.28 + old-format LoRA adapter).
+RUN micromamba run -n tallrec python -m pip install --upgrade pip && \
+    micromamba run -n tallrec pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cu118 \
+      torch==2.0.1+cu118
 
-RUN micromamba run -n p5 pip install --no-cache-dir \
-      fastapi "uvicorn[standard]" supabase \
-      peft==0.6.2 transformers==4.36.2 accelerate==0.24.1 sentencepiece==0.1.96 scikit-learn==1.6.1
+RUN micromamba run -n tallrec pip install --no-cache-dir \
+      accelerate==0.26.1 \
+      bitsandbytes==0.42.0 \
+      "peft @ git+https://github.com/huggingface/peft.git@e536616888d51b453ed354a6f1e243fecb02ea08"
 
-RUN micromamba install -n p5 -c conda-forge -y scikit-surprise
-
-RUN git clone https://github.com/joonhwae-park/P5_mod.git /workspace/P5-main
-ENV P5_ROOT=/workspace/P5-main
 WORKDIR /workspace
-
-# Copy application code
 COPY app.py /workspace/app.py
 
-# t5-small model will be loaded from GCS bucket mounted at runtime
-# Models located at: gs://llmeval_cloud/models/t5-small/
-# Mount bucket to / so /models/t5-small is accessible
+# Model artifacts are loaded from the GCS bucket mounted at runtime:
+#   gs://llmeval_cloud/models/tallrec/llama-7b-hf  -> /models/tallrec/llama-7b-hf
+#   gs://llmeval_cloud/models/tallrec/lora         -> /models/tallrec/lora
+#   gs://llmeval_cloud/models/knn                  -> /models/knn
+ENV TALLREC_BASE=/models/tallrec/llama-7b-hf \
+    TALLREC_LORA=/models/tallrec/lora \
+    KNN_DIR=/models/knn \
+    AUDIO_LIST_TABLE=audio_list \
+    TALLREC_LOAD_8BIT=1 \
+    TALLREC_BATCH=8 \
+    TALLREC_RERANK_POOL=100 \
+    HF_HUB_OFFLINE=1
 
 # Cloud Run Port
 EXPOSE 8080
 
-ENTRYPOINT ["micromamba","run","-n","p5","uvicorn","app:app","--host","0.0.0.0","--port","8080","--log-level","info"]
+ENTRYPOINT ["micromamba","run","-n","tallrec","uvicorn","app:app","--host","0.0.0.0","--port","8080","--log-level","info"]
