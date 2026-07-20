@@ -30,10 +30,12 @@ RUN micromamba run -n tallrec pip install --no-cache-dir \
 WORKDIR /workspace
 COPY app.py /workspace/app.py
 
-# Model artifacts are loaded from the GCS bucket mounted at runtime:
-#   gs://llmeval_cloud/models/tallrec/llama-7b-hf  -> /models/tallrec/llama-7b-hf
-#   gs://llmeval_cloud/models/tallrec/lora         -> /models/tallrec/lora
-#   gs://llmeval_cloud/models/knn                  -> /models/knn
+# Model artifacts are loaded from the GCS bucket mounted at runtime.
+# Cloud Run volume mounts cannot target "/", so keep artifacts at the BUCKET ROOT
+# and mount the bucket at /models:
+#   gs://llmeval_music/tallrec/llama-7b-hf  -> /models/tallrec/llama-7b-hf
+#   gs://llmeval_music/tallrec/lora         -> /models/tallrec/lora
+#   gs://llmeval_music/knn                  -> /models/knn
 ENV TALLREC_BASE=/models/tallrec/llama-7b-hf \
     TALLREC_LORA=/models/tallrec/lora \
     KNN_DIR=/models/knn \
