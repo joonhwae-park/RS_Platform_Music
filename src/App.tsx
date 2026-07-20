@@ -122,33 +122,21 @@ function App() {
       // Check if songs were already selected for this session
       const { data: existing } = await supabase
         .from('session_phase1_songs')
-        .select('spotify_track_id, is_attention_check, position')
+        .select('spotify_track_id, position')
         .eq('session_id', sid)
+        .neq('spotify_track_id', 'attention_check')
         .order('position', { ascending: true });
 
       if (existing && existing.length > 0) {
-        // Session already has songs selected -- fetch metadata for them
-        const realIds = existing.filter(e => !e.is_attention_check).map(e => e.spotify_track_id);
+        const ids = existing.map(e => e.spotify_track_id);
         const { data: meta, error: metaErr } = await supabase
           .from('audio_list')
           .select('spotify_track_id, music4all_id, song, artist, album_name')
-          .in('spotify_track_id', realIds);
+          .in('spotify_track_id', ids);
         if (metaErr) throw metaErr;
 
         const metaMap = new Map((meta || []).map(m => [m.spotify_track_id, m]));
         const songs: Song[] = existing.map(item => {
-          if (item.is_attention_check) {
-            return {
-              spotify_track_id: 'attention_check',
-              music4all_id: 'attention_check',
-              song: 'Attention Check',
-              artist: 'Please do not rate this',
-              album_name: '',
-              is_attention_check: true,
-              audioUrl: getAudioUrl('attention_check'),
-              imageUrl: getAlbumImageUrl('attention_check'),
-            };
-          }
           const m = metaMap.get(item.spotify_track_id);
           return {
             spotify_track_id: item.spotify_track_id,
@@ -192,30 +180,10 @@ function App() {
         pool.splice(idx, 1);
       }
 
-      // Insert attention check at a random position between index 5 and 16
-      const attentionPos = 5 + Math.floor(Math.random() * Math.min(12, selected.length - 4));
-
-      // Build the final song list with attention check inserted
       const songs: Song[] = [];
-      const recordsToInsert: { session_id: string; spotify_track_id: string; position: number; is_attention_check: boolean }[] = [];
-      let position = 1;
+      const recordsToInsert: { session_id: string; spotify_track_id: string; position: number }[] = [];
 
       for (let i = 0; i < selected.length; i++) {
-        if (i === attentionPos) {
-          songs.push({
-            spotify_track_id: 'attention_check',
-            music4all_id: 'attention_check',
-            song: 'Attention Check',
-            artist: 'Please do not rate this',
-            album_name: '',
-            is_attention_check: true,
-            audioUrl: getAudioUrl('attention_check'),
-            imageUrl: getAlbumImageUrl('attention_check'),
-          });
-          recordsToInsert.push({ session_id: sid, spotify_track_id: 'attention_check', position, is_attention_check: true });
-          position++;
-        }
-
         const s = selected[i];
         songs.push({
           spotify_track_id: s.spotify_track_id,
@@ -227,23 +195,7 @@ function App() {
           audioUrl: getAudioUrl(s.music4all_id),
           imageUrl: getAlbumImageUrl(s.music4all_id),
         });
-        recordsToInsert.push({ session_id: sid, spotify_track_id: s.spotify_track_id, position, is_attention_check: false });
-        position++;
-      }
-
-      // If attention check wasn't inserted yet (edge case), append at end
-      if (!songs.some(s => s.is_attention_check)) {
-        songs.push({
-          spotify_track_id: 'attention_check',
-          music4all_id: 'attention_check',
-          song: 'Attention Check',
-          artist: 'Please do not rate this',
-          album_name: '',
-          is_attention_check: true,
-          audioUrl: getAudioUrl('attention_check'),
-          imageUrl: getAlbumImageUrl('attention_check'),
-        });
-        recordsToInsert.push({ session_id: sid, spotify_track_id: 'attention_check', position, is_attention_check: true });
+        recordsToInsert.push({ session_id: sid, spotify_track_id: s.spotify_track_id, position: i + 1 });
       }
 
       // Persist selection for session recovery
@@ -355,8 +307,6 @@ function App() {
         .eq('phase', currentPhase)
         .limit(1);
 
-      const isAttention = trackId === 'attention_check' || trackId === 'attention_check_p2';
-
       if (existingRows && existingRows.length > 0) {
         await supabase.from('song_ratings')
           .update({ rating, listened_duration: listenedDuration })
@@ -367,7 +317,6 @@ function App() {
           spotify_track_id: trackId,
           rating,
           phase: currentPhase,
-          is_attention_check: isAttention,
           listened_duration: listenedDuration,
         });
       }
@@ -422,7 +371,7 @@ function App() {
   };
 
   const getPhase1RatedCount = () => {
-    const phase1Ids = currentSongs.filter(s => !s.is_attention_check).map(s => s.spotify_track_id);
+    const phase1Ids = currentSongs.map(s => s.spotify_track_id);
     return ratings.filter(r => r.rating >= 0 && phase1Ids.includes(r.trackId)).length;
   };
 
@@ -437,7 +386,7 @@ function App() {
   };
 
   const allPhase1Rated = () => {
-    const phase1Ids = currentSongs.filter(s => !s.is_attention_check).map(s => s.spotify_track_id);
+    const phase1Ids = currentSongs.map(s => s.spotify_track_id);
     return phase1Ids.length > 0 && phase1Ids.every(id => ratings.some(r => r.trackId === id && r.rating >= 0));
   };
 
@@ -576,7 +525,7 @@ function App() {
   const ratedCount = phase === 'recommendation' ? getPhase2RatedCount() : getPhase1RatedCount();
   const totalRequired = phase === 'recommendation'
     ? phase2Songs.filter(s => !s.is_attention_check).length
-    : currentSongs.filter(s => !s.is_attention_check).length;
+    : currentSongs.length;
 
   return (
     <div className="min-h-screen bg-gray-950">
