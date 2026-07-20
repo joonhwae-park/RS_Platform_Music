@@ -1,87 +1,57 @@
-import os, sys, re, json, torch, numpy as np, pandas as pd, random, logging
-from typing import List, Dict, Tuple, Optional, Any
+import os, sys, json, time, torch, numpy as np, pandas as pd, random, logging
+from typing import List, Dict, Tuple, Optional
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
 import threading
-from surprise import Dataset, Reader, SVD
+import scipy.sparse as sp
 
+# ===================== Logging =====================
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
 for h in logger.handlers[:]:
     logger.removeHandler(h)
-
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
-formatter = logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-handler.setFormatter(formatter)
-
+handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(handler)
 
+# ===================== Config (env) =====================
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
-P5_ROOT = os.getenv("P5_ROOT", "/workspace/P5-main")
-P5_CKPT = os.getenv("P5_CKPT", "/models/p5/mvt_aug_epoch10.pth")
-P5_BACKBONE = os.getenv("P5_BACKBONE", "/models/t5-small")
-P5_MAX_LEN = int(os.getenv("P5_MAX_LEN", "256"))
-P5_GEN_MAX_LEN = int(os.getenv("P5_GEN_MAX_LEN", "16"))
-P5_DROPOUT = float(os.getenv("P5_DROPOUT", "0.1"))
-P5_BATCH = int(os.getenv("P5_BATCH", "16"))
+# Catalog: full candidate pool with metadata (spotify_track_id, music4all_id, artist, song).
+# Loaded from the Supabase `audio_list` table at startup; local CSV is a fallback only.
+AUDIO_LIST_TABLE = os.getenv("AUDIO_LIST_TABLE", "audio_list")
+AUDIO_LIST_PATH = os.getenv("AUDIO_LIST_PATH", "/models/audio_list.csv")  # fallback
 
-# Soft prompt (hf PEFT)
-SOFTPROMPT_METHOD = os.getenv("SOFTPROMPT_METHOD", "prompt_tuning")  # 'prompt_tuning' or 'p_tuning'
-SOFTPROMPT_VTOKENS = int(os.getenv("SOFTPROMPT_VTOKENS", "40"))
-SOFTPROMPT_LR = float(os.getenv("SOFTPROMPT_LR", "5e-4"))
-SOFTPROMPT_STEPS = 10
-SOFTPROMPT_BSZ = int(os.getenv("SOFTPROMPT_BSZ", "8"))
-SOFTPROMPT_INIT_TEXT = os.getenv("SOFTPROMPT_INIT_TEXT", "rating prediction")
-HISTORY_MAX_TRAIN = 30
+# Item-kNN serving artifacts (produced by item_knn_pipeline.py: --out <KNN_DIR>)
+KNN_DIR = os.getenv("KNN_DIR", "/models/knn")
 
-SVD_DIR = os.getenv("SVD_DIR", "/models/svd_surprise")
+# TALLRec artifacts (base LLaMA-7B HF dir + trained LoRA adapter dir)
+TALLREC_BASE = os.getenv("TALLREC_BASE", "/models/tallrec/llama-7b-hf")
+TALLREC_LORA = os.getenv("TALLREC_LORA", "/models/tallrec/lora")
+TALLREC_BATCH = int(os.getenv("TALLREC_BATCH", "8"))
+TALLREC_MAX_LEN = int(os.getenv("TALLREC_MAX_LEN", "512"))
+TALLREC_LOAD_8BIT = os.getenv("TALLREC_LOAD_8BIT", "1") == "1"
+TALLREC_MAX_HISTORY = int(os.getenv("TALLREC_MAX_HISTORY", "20"))
+# Cascade size: TALLRec reranks only the kNN top-N (latency budget: 30s on one L4).
+# Measured ~6.3 samples/sec on L4 8-bit -> 100 ~= 16s (safe), 200 ~= 32s (borderline).
+TALLREC_RERANK_POOL = int(os.getenv("TALLREC_RERANK_POOL", "100"))
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# ============= datamaps (movie id mapping for P5) =============
-DATAMAPS_PATH = os.getenv("DATAMAPS_PATH", "/models/p5/datamaps.json")
-ITEM2ID: Dict[str, str] = {}   # external movie_id(str) -> internal item_id(str)
-ID2ITEM: Dict[str, str] = {}   # internal item_id(str) -> external movie_id(str)
+# Token ids of "Yes"/"No" in the LLaMA-1 tokenizer (hardcoded in TALLRec's code)
+YES_TOKEN_ID, NO_TOKEN_ID = 8241, 3782
 
-def load_datamaps():
-    global ITEM2ID, ID2ITEM
-    try:
-        logger.info(f"Loading datamaps from {DATAMAPS_PATH}")
-        with open(DATAMAPS_PATH, "r") as f:
-            dm = json.load(f)
-        ITEM2ID = dm.get("item2id", {})
-        ID2ITEM = {v: k for k, v in ITEM2ID.items()}
-        logger.info(f"Datamaps loaded successfully: item2id size={len(ITEM2ID)}")
-    except Exception as e:
-        logger.error(f"Failed to load datamaps: {e}")
-        raise
-
-def map_movie_for_p5(ext_mid: str) -> Optional[str]:
-    return ITEM2ID.get(str(ext_mid))
-
-def map_history_for_p5(history: List[Dict], max_n: int = HISTORY_MAX_TRAIN) -> List[Dict]:
-    out = []
-    for h in history[:max_n]:
-        ext = str(h.get("movie_id"))
-        internal = map_movie_for_p5(ext)
-        if internal is None:
-            continue
-        out.append({"movie_id": internal, "rating": float(h.get("rating", 0.0))})
-    return out
+random.seed(2026)
+np.random.seed(2026)
 
 # ===================== Client / App =====================
 sb: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 app = FastAPI()
-
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, replace with your frontend domain
@@ -90,518 +60,363 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ======================= SVD =======================
-random.seed(2026)
-np.random.seed(2026)
+# ===================== Catalog =====================
+# audio_list.csv: spotify_track_id, music4all_id, spotify_url, rating_count, artist, song, album_name
+CATALOG: Optional[pd.DataFrame] = None
+SPOTIFY2META: Dict[str, Dict] = {}   # spotify_track_id -> {music4all_id, artist, song, rating_count}
 
-SVD_5CORE_PATH = os.getenv("SVD_5CORE_PATH", f"{SVD_DIR}/ratings_5core.csv")
-SVD_HISTORY_PATH = os.getenv("SVD_HISTORY_PATH", f"{SVD_DIR}/lab_ratings.csv")
-SVD_HP_PATH = os.getenv("SVD_HP_PATH", f"{SVD_DIR}/svd_hyperparams.json")
+def _fetch_audio_list_table(page_size: int = 1000) -> pd.DataFrame:
+    """Fetch the full `audio_list` table (paginated; supabase caps rows per request)."""
+    rows, start = [], 0
+    while True:
+        r = sb.table(AUDIO_LIST_TABLE).select("*") \
+            .range(start, start + page_size - 1).execute()
+        chunk = r.data or []
+        rows.extend(chunk)
+        if len(chunk) < page_size:
+            break
+        start += page_size
+    return pd.DataFrame(rows)
 
-SVD_RATING_SCALE = (0, 10)
+def load_catalog():
+    global CATALOG, SPOTIFY2META
+    try:
+        logger.info(f"Loading catalog from Supabase table '{AUDIO_LIST_TABLE}'")
+        df = _fetch_audio_list_table()
+        logger.info(f"Fetched {len(df)} rows from '{AUDIO_LIST_TABLE}'")
+    except Exception as e:
+        logger.error(f"Table load failed ({e}); falling back to {AUDIO_LIST_PATH}")
+        df = pd.read_csv(AUDIO_LIST_PATH)
+    df["spotify_track_id"] = df["spotify_track_id"].astype(str)
+    df["music4all_id"] = df["music4all_id"].astype(str)
+    df = df.dropna(subset=["spotify_track_id", "music4all_id", "artist", "song"])
+    df = df.drop_duplicates(subset=["spotify_track_id"])
+    CATALOG = df.reset_index(drop=True)
+    SPOTIFY2META = {
+        r.spotify_track_id: {
+            "music4all_id": r.music4all_id,
+            "artist": str(r.artist),
+            "song": str(r.song),
+            "rating_count": float(getattr(r, "rating_count", 0) or 0),
+        }
+        for r in CATALOG.itertuples(index=False)
+    }
+    logger.info(f"Catalog loaded: {len(CATALOG)} tracks")
 
-SURPRISE_BASE_RATINGS: Optional[pd.DataFrame] = None
-SURPRISE_HP: Dict[str, Any] = {}
+def item_repr(spotify_id: str) -> str:
+    """Textual item representation; must match TALLRec training format."""
+    m = SPOTIFY2META[spotify_id]
+    return f"\"{m['song']}\" by {m['artist']}"
 
-def _load_json_if_exists(path: str) -> Dict[str, Any]:
-    if path and os.path.exists(path):
-        with open(path, "r") as f:
-            return json.load(f)
-    else:
-        print("!!! Missing svd_hyperparams.json !!!")
-        return {}
+# ===================== Item-kNN =====================
+# Artifacts from item_knn_implicit.py (implicit.nearest_neighbours.CosineRecommender):
+#   implicit_cosine_knn.npz  -- similarity CSR stored as data/indices/indptr/shape (+ K)
+#   item_ids.json            -- matrix index -> music4all_id
+#   config.json              -- {"model": ..., "K": ..., ...}
+# The npz is plain numpy (no pickle), so we reconstruct the CSR directly; if the
+# keys ever differ (other implicit version), we fall back to implicit's own loader.
+KNN_S: Optional[sp.csr_matrix] = None
+KNN_ITEM_INDEX: Dict[str, int] = {}   # music4all_id -> matrix index
+KNN_ITEM_IDS: Optional[np.ndarray] = None
 
-def load_surprise_hparams() -> Dict[str, Any]:
-    hp = _load_json_if_exists(SVD_HP_PATH)
-    hp = {k: v for k, v in hp.items()}
-    return hp
+def load_knn_assets():
+    global KNN_S, KNN_ITEM_INDEX, KNN_ITEM_IDS
+    npz_path = os.path.join(KNN_DIR, "implicit_cosine_knn.npz")
+    logger.info(f"Loading item-kNN artifacts from {KNN_DIR}")
+    try:
+        with np.load(npz_path, allow_pickle=False) as z:
+            if not {"data", "indices", "indptr", "shape"} <= set(z.files):
+                raise KeyError(f"unexpected npz keys: {sorted(z.files)}")
+            KNN_S = sp.csr_matrix(
+                (z["data"], z["indices"], z["indptr"]), shape=tuple(z["shape"])
+            )
+    except Exception as e:
+        logger.warning(f"Manual npz load failed ({e}); falling back to implicit loader")
+        from implicit.nearest_neighbours import CosineRecommender
+        KNN_S = CosineRecommender.load(npz_path).similarity.tocsr()
 
-def load_surprise_base_ratings() -> pd.DataFrame:
-    if not os.path.exists(SVD_5CORE_PATH):
-        raise FileNotFoundError(f"ratings_5core.csv not found: {SVD_5CORE_PATH}")
-    if not os.path.exists(SVD_HISTORY_PATH):
-        raise FileNotFoundError(f"lab_ratings.csv not found: {SVD_HISTORY_PATH}")
+    with open(os.path.join(KNN_DIR, "item_ids.json")) as f:
+        KNN_ITEM_IDS = np.asarray(json.load(f))
+    KNN_ITEM_INDEX = {iid: j for j, iid in enumerate(KNN_ITEM_IDS)}
+    if KNN_S.shape[0] != len(KNN_ITEM_IDS):
+        raise ValueError(f"similarity shape {KNN_S.shape} != item_ids {len(KNN_ITEM_IDS)}")
+    with open(os.path.join(KNN_DIR, "config.json")) as f:
+        cfg = json.load(f)
+    logger.info(f"item-kNN loaded: {KNN_S.shape[0]} items, nnz={KNN_S.nnz}, K={cfg.get('K')}")
 
-    df5 = pd.read_csv(SVD_5CORE_PATH, dtype={"MovieID": str})
-    df5 = df5.rename(columns={"UserID": "user", "MovieID": "item", "Rating": "rating"})
-    df5 = df5[["user", "item", "rating"]]
+def score_candidates_knn(history: List[Dict], cand_ids: List[str]) -> List[Tuple[str, float]]:
+    """Fold-in scoring: scores = r @ S with r in {+1, -1} over the item axis.
 
-    dfh = pd.read_csv(SVD_HISTORY_PATH, dtype={"item_id": str})
-    dfh = dfh.rename(columns={"user_id": "user", "item_id": "item"})
-    dfh = dfh[["user", "item", "rating"]]
-
-    df = pd.concat([df5, dfh], ignore_index=True)
-
-    df["user"] = df["user"].astype(str)
-    df["item"] = df["item"].astype(str)
-    df["rating"] = df["rating"].astype(float)
-
-    df = df.dropna(subset=["user", "item", "rating"])
-
-    return df
-
-def load_surprise_assets():
-    global SURPRISE_BASE_RATINGS, SURPRISE_HP
-    logger.info(f"Loading Surprise base ratings from: {SVD_5CORE_PATH} + {SVD_HISTORY_PATH}")
-    SURPRISE_BASE_RATINGS = load_surprise_base_ratings()
-    logger.info(f"Surprise base ratings loaded: rows={len(SURPRISE_BASE_RATINGS)}")
-
-    SURPRISE_HP = load_surprise_hparams()
-    logger.info(f"Surprise SVD hyperparams loaded: keys={list(SURPRISE_HP.keys())}")
-
-def _build_user_df(session_id: str, history: List[Dict]) -> pd.DataFrame:
-    rows = []
+    Direction matters: the pruned similarity is asymmetric, and both implicit's
+    recommend() and the offline evaluation (rank_holdout) use r @ S.
+    history: [{spotify_track_id, rating(1|0)}]; cand_ids: candidate spotify ids.
+    Ties at score <= 0 are broken by catalog popularity (rating_count) so the
+    top-20 pool stays sensible even when neighbor overlap is sparse.
+    """
+    cols, vals = [], []
     for h in history:
-        mid = str(h.get("movie_id"))
-        r = float(h.get("rating", 0.0))
-        rows.append({"user": str(session_id), "item": mid, "rating": r})
-
-    dfu = pd.DataFrame(rows)
-
-    dfu["user"] = dfu["user"].astype(str)
-    dfu["item"] = dfu["item"].astype(str)
-    dfu["rating"] = dfu["rating"].astype(float)
-
-    return dfu
-
-def score_candidates_svd_surprise(session_id: str, history: List[Dict], cand_ids: List[str]) -> List[Tuple[str, float]]:
-
-    if SURPRISE_BASE_RATINGS is None:
-        raise RuntimeError("SURPRISE_BASE_RATINGS is not loaded. Call load_surprise_assets() at startup.")
-
-    dfu = _build_user_df(session_id, history)
-    if dfu.empty:
-        logger.warning("No user ratings available for Surprise SVD scoring")
+        meta = SPOTIFY2META.get(h["spotify_track_id"])
+        if meta is None:
+            continue
+        j = KNN_ITEM_INDEX.get(meta["music4all_id"])
+        if j is None:
+            continue
+        cols.append(j)
+        vals.append(1.0 if int(h["rating"]) == 1 else -1.0)
+    if not cols:
+        logger.warning("kNN: no history items mapped to the similarity matrix")
         return []
 
-    df_all = pd.concat([SURPRISE_BASE_RATINGS, dfu], ignore_index=True)
+    r = sp.csr_matrix((vals, ([0] * len(cols), cols)), shape=(1, len(KNN_ITEM_IDS)), dtype=np.float32)
+    scores = np.asarray((r @ KNN_S).todense()).ravel()
 
-    reader = Reader(rating_scale=SVD_RATING_SCALE)
-    data = Dataset.load_from_df(df_all[["user", "item", "rating"]], reader)
-    trainset = data.build_full_trainset()
-    
-    logger.info(f"Fitting SVD (params - {SURPRISE_HP})")
-    algo = SVD(**(SURPRISE_HP or {}))
-    algo.fit(trainset)
-
-    out: List[Tuple[str, float]] = []
-    uid = str(session_id)
-
+    out = []
     for cid in cand_ids:
-        iid = str(cid)
-        est = algo.predict(uid, iid).est
-        out.append((iid, float(est)))
+        meta = SPOTIFY2META.get(cid)
+        j = KNN_ITEM_INDEX.get(meta["music4all_id"]) if meta else None
+        s = float(scores[j]) if j is not None else 0.0
+        out.append((cid, s, meta["rating_count"] if meta else 0.0))
 
-    logger.info(f"Surprise SVD scored {len(out)} candidates")
-    return out
+    out.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    n_pos = sum(1 for _, s, _ in out if s > 0)
+    logger.info(f"kNN scored {len(out)} candidates ({n_pos} with positive score)")
+    return [(cid, s) for cid, s, _ in out]
 
+# ===================== TALLRec =====================
+TALLREC_MODEL = None
+TALLREC_TOKENIZER = None
 
+# Alpaca template exactly as in TALLRec finetune_rec.py / evaluate.py
+# (including the literal '# noqa: E501' which was part of the training prompts).
+TALLREC_TEMPLATE = (
+    "Below is an instruction that describes a task, paired with an input that provides further context. "
+    "Write a response that appropriately completes the request.  # noqa: E501\n"
+    "\n"
+    "### Instruction:\n"
+    "{instruction}\n"
+    "\n"
+    "### Input:\n"
+    "{input}\n"
+    "\n"
+    "### Response:\n"
+)
+TALLREC_INSTRUCTION = (
+    "Given the user's preference and unpreference, identify whether the user "
+    "will like the target music by answering \"Yes.\" or \"No.\"."
+)
 
-# ===================== P5 =========================
-sys.path.extend([P5_ROOT, os.path.join(P5_ROOT, "src")])
-from transformers import T5Config
-from src.tokenization import P5Tokenizer
-from src.pretrain_model import P5Pretraining
-from src.utils import load_state_dict
-
-from peft import get_peft_model, PromptTuningConfig, PromptEncoderConfig, TaskType
-
-TOKENIZER, BASE_STATE = None, None
-
-def create_config_eval():
-    # Load config from local cache only (no network calls)
-    cfg = T5Config.from_pretrained(P5_BACKBONE, local_files_only=True)
-    cfg.dropout_rate = P5_DROPOUT
-    cfg.dropout = P5_DROPOUT
-    cfg.attention_dropout = P5_DROPOUT
-    cfg.activation_dropout = P5_DROPOUT
-    cfg.losses = "rating"
-    return cfg
-
-def load_tokenizer_once():
-    global TOKENIZER
-    if TOKENIZER is not None:
+def load_tallrec_once():
+    global TALLREC_MODEL, TALLREC_TOKENIZER
+    if TALLREC_MODEL is not None:
         return
-    try:
-        logger.info(f"Loading P5 tokenizer from {P5_BACKBONE}")
-        # Load tokenizer from local cache only (no network calls)
-        TOKENIZER = P5Tokenizer.from_pretrained(
-            P5_BACKBONE,
-            max_length=P5_MAX_LEN,
-            do_lower_case=False,
-            local_files_only=True
+    from transformers import LlamaForCausalLM, LlamaTokenizer
+    from peft import PeftModel
+
+    logger.info(f"Loading TALLRec base model from {TALLREC_BASE} (8bit={TALLREC_LOAD_8BIT})")
+    TALLREC_TOKENIZER = LlamaTokenizer.from_pretrained(TALLREC_BASE)
+    TALLREC_TOKENIZER.pad_token_id = 0
+    TALLREC_TOKENIZER.padding_side = "left"  # align last position for batched next-token scoring
+
+    if TALLREC_LOAD_8BIT:
+        base = LlamaForCausalLM.from_pretrained(
+            TALLREC_BASE, load_in_8bit=True, torch_dtype=torch.float16, device_map="auto"
         )
-        logger.info("P5 tokenizer loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to load P5 tokenizer: {e}")
-        raise
+    else:
+        base = LlamaForCausalLM.from_pretrained(
+            TALLREC_BASE, torch_dtype=torch.float16, device_map="auto"
+        )
 
-def load_base_state_once():
-    global BASE_STATE
-    if BASE_STATE is not None:
-        return
-    try:
-        if os.path.exists(P5_CKPT):
-            logger.info(f"Loading P5 checkpoint from {P5_CKPT}")
-            BASE_STATE = load_state_dict(P5_CKPT, DEVICE)
-            logger.info("P5 checkpoint loaded successfully")
-        else:
-            logger.warning(f"P5 checkpoint not found at {P5_CKPT}")
-            BASE_STATE = None
-    except Exception as e:
-        logger.error(f"Failed to load P5 checkpoint: {e}")
-        raise
-
-def create_per_request_base():
-    cfg = create_config_eval()
-    model = P5Pretraining.from_pretrained(P5_BACKBONE, config=cfg, local_files_only=True).to(DEVICE)
-    model.resize_token_embeddings(TOKENIZER.vocab_size)
-    model.tokenizer = TOKENIZER
+    logger.info(f"Loading TALLRec LoRA adapter from {TALLREC_LORA}")
+    model = PeftModel.from_pretrained(base, TALLREC_LORA, torch_dtype=torch.float16)
     model.eval()
-    if BASE_STATE is not None:
-        _ = model.load_state_dict(BASE_STATE, strict=False)
-    return model
+    TALLREC_MODEL = model
 
-def attach_soft_prompt(model, tokenizer,
-                       method: str = SOFTPROMPT_METHOD,
-                       num_virtual_tokens: int = SOFTPROMPT_VTOKENS,
-                       init_text: Optional[str] = SOFTPROMPT_INIT_TEXT):
-    if method not in {"prompt_tuning", "p_tuning"}:
-        raise ValueError("SOFTPROMPT_METHOD must be 'prompt_tuning' or 'p_tuning'")
+    # Sanity check: the hardcoded ids must decode to "Yes"/"No"
+    dec = TALLREC_TOKENIZER.convert_ids_to_tokens([YES_TOKEN_ID, NO_TOKEN_ID])
+    logger.info(f"TALLRec loaded. Token check: {YES_TOKEN_ID}->{dec[0]}, {NO_TOKEN_ID}->{dec[1]}")
 
-    # Move model to CPU temporarily to avoid device mismatch during PEFT initialization
-    device = next(model.parameters()).device
-    model = model.cpu()
-
-    if method == "prompt_tuning":
-        cfg = PromptTuningConfig(
-            task_type=TaskType.SEQ_2_SEQ_LM,
-            num_virtual_tokens=num_virtual_tokens,
-            tokenizer_name_or_path=getattr(tokenizer, "name_or_path", P5_BACKBONE),
-            prompt_tuning_init="TEXT" if init_text else "RANDOM",
-            prompt_tuning_init_text=init_text or "rating prediction",
-        )
-    else:  # p_tuning v2
-        cfg = PromptEncoderConfig(
-            task_type=TaskType.SEQ_2_SEQ_LM,
-            num_virtual_tokens=num_virtual_tokens,
-            encoder_hidden_size=128,
-        )
-    peft_model = get_peft_model(model, cfg)
-    peft_model.print_trainable_parameters()
-
-    # Move back to original device
-    peft_model = peft_model.to(device)
-    return peft_model
-
-def _first_float(text: str, default: float = -1.0) -> float:
-    m = re.search(r"-?\d+(\.\d+)?", text.strip())
-    return float(m.group(0)) if m else default
-
-def make_p5_prompt(session_id: str, movie_id: str, history: Optional[List[Dict]] = None) -> str:
-    base_prompt = f"Which star rating will user_{session_id} give movie_{movie_id}?"
-    if history and len(history) > 0:
-        history_str = "Previous ratings: "
-        for h in history[-30:]:
-            hist_mid = str(h.get("movie_id", "unknown"))
-            hist_rating = float(h.get("rating", 0.0)) 
-            # Use integer format for display since user ratings are integers
-            history_str += f"movie_{hist_mid}:{int(hist_rating)}, "
-        history_str = history_str.rstrip(", ")
-        return f"{history_str}. {base_prompt} (0.0 being lowest and 10.0 being highest, decimals allowed)"
-    return f"{base_prompt} (0.0 being lowest and 10.0 being highest, decimals allowed)"
-
-def _build_training_examples(session_id: str, history: List[Dict]) -> List[Tuple[str, str]]:
-    """
-    returns list of (src_prompt, tgt_text) where tgt_text is like '4.0'
-    For each known rating, we create the training example with exact integer rating
-    """
-    exs = []
-    for h in history[:HISTORY_MAX_TRAIN]:
-        mid = str(h["movie_id"])
-        rating = float(h["rating"])
-        src = make_p5_prompt(session_id, mid, history)
-        # Keep integer format for known ratings
-        tgt = f"{int(rating)}"
-        exs.append((src, tgt))
-    return exs
-
-def finetune_soft_prompt(per_user_model, tokenizer, session_id: str, history: List[Dict],
-                         lr: float = SOFTPROMPT_LR, steps: int = SOFTPROMPT_STEPS, bsz: int = SOFTPROMPT_BSZ):
-    exs = _build_training_examples(session_id, history)
-    if not exs:
-        logger.warning(f"No training examples available for session {session_id}")
-        return
-
-    logger.info(f"Starting soft prompt finetuning for session {session_id} with {len(exs)} examples")
-    device = next(per_user_model.parameters()).device
-    per_user_model.train()
-    optim = torch.optim.AdamW([p for p in per_user_model.parameters() if p.requires_grad], lr=lr)
-
-    random.shuffle(exs)
-    step = 0
-    i = 0
-    while step < steps:
-        batch = exs[i:i+bsz]
-        if not batch:
-            i = 0
-            continue
-        i += bsz
-        srcs = [s for s, _ in batch]
-        tgts = [t for _, t in batch]
-
-        # AMP can be further added if needed.
-        enc = tokenizer(srcs, return_tensors="pt", padding=True, truncation=True, max_length=P5_MAX_LEN).to(device)
-        with tokenizer.as_target_tokenizer():
-            dec = tokenizer(tgts, return_tensors="pt", padding=True, truncation=True, max_length=8).to(device)
-        labels = dec["input_ids"].clone()
-        labels[labels == tokenizer.pad_token_id] = -100
-
-        optim.zero_grad(set_to_none=True)
-        out = per_user_model(**enc, labels=labels)
-        loss = out.loss
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(per_user_model.parameters(), 1.0)
-        optim.step()
-
-        if (step + 1) % 10 == 0:
-            logger.info(f"Soft prompt finetuning step {step+1}/{steps} loss={loss.item():.4f}")
-        step += 1
-
-    per_user_model.eval()
-    logger.info(f"Soft prompt finetuning completed for session {session_id}")
+def make_tallrec_prompt(liked: List[str], disliked: List[str], target: str) -> str:
+    pref = ", ".join(liked) if liked else "None"
+    unpref = ", ".join(disliked) if disliked else "None"
+    task_input = (
+        f"User Preference: {pref}\n"
+        f"User Unpreference: {unpref}\n"
+        f"Whether the user will like the target music {target}?"
+    )
+    return TALLREC_TEMPLATE.format(instruction=TALLREC_INSTRUCTION, input=task_input)
 
 @torch.no_grad()
-def p5_score_candidates_mapped(model, tokenizer, session_id: str,
-                               history_mapped: List[Dict], mapped_ids: List[str]) -> List[float]:
-    res: List[float] = []
-    texts = [make_p5_prompt(session_id, mid, history_mapped) for mid in mapped_ids]
-    logger.info(f"P5 scoring {len(texts)} candidates for session {session_id}")
+def score_candidates_tallrec(history: List[Dict], cand_ids: List[str]) -> List[Tuple[str, float]]:
+    """Score each candidate with P(Yes) at the first response token.
 
-    for s in range(0, len(texts), P5_BATCH):
-        batch = texts[s:s+P5_BATCH]
-        enc = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=P5_MAX_LEN)
-        enc = {k: v.to(DEVICE) for k, v in enc.items()}
+    Equivalent to TALLRec evaluate.py: softmax over logits of token ids
+    [NO, YES] at the position right after '### Response:\\n'.
+    """
+    # Chronological history (oldest -> newest), capped like training (max_history)
+    hist = sorted(history, key=lambda h: h.get("created_at") or "")
+    liked = [item_repr(h["spotify_track_id"]) for h in hist
+             if int(h["rating"]) == 1 and h["spotify_track_id"] in SPOTIFY2META][-TALLREC_MAX_HISTORY:]
+    disliked = [item_repr(h["spotify_track_id"]) for h in hist
+                if int(h["rating"]) == 0 and h["spotify_track_id"] in SPOTIFY2META][-TALLREC_MAX_HISTORY:]
 
-        # Log first batch for debugging
-        if s == 0 and len(batch) > 0:
-            logger.info(f"Sample prompt: {batch[0][:200]}...")
-            logger.info(f"Input tokens: {enc['input_ids'].shape}")
+    prompts = [make_tallrec_prompt(liked, disliked, item_repr(cid)) for cid in cand_ids]
+    logger.info(f"TALLRec scoring {len(prompts)} candidates (batch={TALLREC_BATCH})")
 
-        out = model.generate(**enc, max_length=P5_GEN_MAX_LEN, num_beams=2, do_sample=False)
-        
-        dec = tokenizer.batch_decode(out, skip_special_tokens=True)
+    probs: List[float] = []
+    for s in range(0, len(prompts), TALLREC_BATCH):
+        batch = prompts[s:s + TALLREC_BATCH]
+        enc = TALLREC_TOKENIZER(
+            batch, return_tensors="pt", padding=True, truncation=True, max_length=TALLREC_MAX_LEN
+        ).to(TALLREC_MODEL.device)
+        logits = TALLREC_MODEL(**enc).logits[:, -1, :]                # next-token logits
+        yn = logits[:, [NO_TOKEN_ID, YES_TOKEN_ID]].float().softmax(dim=-1)
+        probs.extend(yn[:, 1].tolist())                               # P(Yes)
+        if s == 0:
+            logger.info(f"Sample prompt (truncated): {batch[0][:200]}...")
 
-        # Log first batch outputs for debugging
-        if s == 0 and len(dec) > 0:
-            logger.info(f"Sample generated outputs (first 3): {dec[:3]}")
-
-        for txt in dec:
-            score = _first_float(txt, default=-1.0)
-            res.append(score)
-
-    logger.info(f"P5 scoring completed, generated {len(res)} scores")
-    logger.info(f"Score distribution: min={min(res) if res else 'N/A'}, max={max(res) if res else 'N/A'}, mean={sum(res)/len(res) if res else 'N/A'}")
-    return res
+    scored = list(zip(cand_ids, probs))
+    logger.info(f"TALLRec scoring done. P(Yes): min={min(probs):.3f} max={max(probs):.3f} mean={np.mean(probs):.3f}")
+    return scored
 
 # ===================== Supabase I/O =====================
-def get_history(session_id: str, limit: int = 50) -> List[Dict]:
+def get_history(session_id: str, limit: int = 100) -> List[Dict]:
+    """Phase-1 binary ratings for the session (attention checks excluded)."""
     try:
-        logger.info(f"Fetching history for session {session_id}")
-        r = sb.table("movie_ratings")\
-            .select("movie_id,rating")\
-            .eq("session_id", session_id)\
-            .order("created_at", desc=True)\
+        logger.info(f"Fetching phase-1 ratings for session {session_id}")
+        r = sb.table("song_ratings") \
+            .select("spotify_track_id,rating,is_attention_check,created_at") \
+            .eq("session_id", session_id) \
+            .eq("phase", 1) \
+            .order("created_at", desc=False) \
             .limit(limit).execute()
-        history = r.data or []
-        logger.info(f"Retrieved {len(history)} ratings for session {session_id}")
+        rows = r.data or []
+        history = [x for x in rows if not x.get("is_attention_check")]
+        logger.info(f"Retrieved {len(rows)} rows ({len(history)} usable after excluding attention checks)")
         return history
     except Exception as e:
         logger.error(f"Failed to fetch history for session {session_id}: {e}")
         return []
 
-def get_phase1_movies(session_id: str) -> List[str]:
-    """
-    Get the list of Phase 1 movies for a given session.
-    These movies should be excluded from Phase 2 recommendations.
-    """
+def get_rated_ids(session_id: str) -> List[str]:
+    """All track ids this session has already rated (any phase, incl. attention checks)."""
     try:
-        logger.info(f"Fetching Phase 1 movies for session {session_id}")
-        r = sb.table("session_phase1_movies").select("movie_id").eq("session_id", session_id).execute()
-        phase1_movies = [str(row["movie_id"]) for row in (r.data or [])]
-        logger.info(f"Retrieved {len(phase1_movies)} Phase 1 movies to exclude")
-        return phase1_movies
+        r = sb.table("song_ratings").select("spotify_track_id").eq("session_id", session_id).execute()
+        return list({row["spotify_track_id"] for row in (r.data or [])})
     except Exception as e:
-        logger.error(f"Failed to fetch Phase 1 movies: {e}")
+        logger.error(f"Failed to fetch rated ids: {e}")
         return []
 
-def get_candidates(limit: int = 10000, exclude_movies: List[str] = None) -> List[str]:
-    """
-    Get candidate movies from phase2_movies, optionally excluding specific movies.
-
-    Args:
-        limit: Maximum number of candidates to fetch
-        exclude_movies: List of movie IDs to exclude (e.g., Phase 1 movies)
-    """
-    try:
-        logger.info("Fetching candidate movies from phase2_movies")
-        r = sb.table("phase2_movies").select("id").limit(limit).execute()
-        candidates = [str(row["id"]) for row in (r.data or [])]
-
-        if exclude_movies:
-            original_count = len(candidates)
-            candidates = [c for c in candidates if c not in exclude_movies]
-            excluded_count = original_count - len(candidates)
-            logger.info(f"Excluded {excluded_count} Phase 1 movies from candidates")
-
-        logger.info(f"Retrieved {len(candidates)} candidate movies")
-        return candidates
-    except Exception as e:
-        logger.error(f"Failed to fetch candidates: {e}")
-        return []
-
-# ====== display_order ======
-def build_display_sequence(p5_top: List[Tuple[str, float]],
-                           svd_top: List[Tuple[str, float]]) -> List[Tuple[str, str, int]]:
-    """
-    Interleaved Displaying Order: starting model is random.
-    - Take all 10 from each model as candidates.
-    - Alternate between models: Model1 #1, Model2 #1, Model1 #2, Model2 #2, etc.
-    - If a movie is duplicated, skip it in the later model and move to the next rank.
-    - Continue until we have 10 unique movies.
-    Return: [(model, movie_id, display_order 1..10)]
-    """
-    p5_list = p5_top[:10]  # Use all 10 ranks
-    svd_list = svd_top[:10]  # Use all 10 ranks
-    i_p5 = 0
-    i_svd = 0
-    need_p5 = 10  # Try to get up to 10 from P5
-    need_svd = 10  # Try to get up to 10 from SVD
-    used = set()
-    seq: List[Tuple[str, str, int]] = []
-
-    # Decide the starting model randomly
-    turn = random.choice(["p5", "svd"])
-    logger.info(f"Building display sequence starting with {turn}")
-
-    # Continue until we have 10 unique movies or run out of candidates
-    while len(seq) < 10 and (i_p5 < len(p5_list) or i_svd < len(svd_list)):
-        if turn == "p5":
-            # Skip duplicates in P5
-            while i_p5 < len(p5_list) and p5_list[i_p5][0] in used:
-                i_p5 += 1
-            if i_p5 < len(p5_list):
-                mid = p5_list[i_p5][0]
-                seq.append(("p5", mid, len(seq)+1))
-                used.add(mid)
-                i_p5 += 1
-            turn = "svd"
-        elif turn == "svd":
-            # Skip duplicates in SVD
-            while i_svd < len(svd_list) and svd_list[i_svd][0] in used:
-                i_svd += 1
-            if i_svd < len(svd_list):
-                mid = svd_list[i_svd][0]
-                seq.append(("svd", mid, len(seq)+1))
-                used.add(mid)
-                i_svd += 1
-            turn = "p5"
-
-        # Safety check: if both models are exhausted, break
-        if i_p5 >= len(p5_list) and i_svd >= len(svd_list):
-            break
-
-    logger.info(f"Display sequence built with {len(seq)} movies (P5 used: {sum(1 for m, _, _ in seq if m == 'p5')}, SVD used: {sum(1 for m, _, _ in seq if m == 'svd')})")
-    return seq
+def get_candidates(exclude_ids: List[str]) -> List[str]:
+    """Candidate pool = full catalog minus already-rated tracks."""
+    excl = set(exclude_ids)
+    cands = [cid for cid in SPOTIFY2META.keys() if cid not in excl]
+    logger.info(f"Candidates: {len(cands)} (excluded {len(excl)} rated tracks)")
+    return cands
 
 def rows_from_scored(session_id: str, model: str, scored: List[Tuple[str, float]],
-                     topk: int, phase: int) -> List[Dict]:
-    """
-    Store the model's internal TopK (=10) as rank 1..TopK.
-    Set display_order to None as default; fill it later when applying the display order.
-    """
+                     topk: int, batch: int) -> List[Dict]:
+    """Keep the model's internal top-K as rank 1..K; display_order filled later."""
     top = sorted(scored, key=lambda x: x[1], reverse=True)[:topk]
     rows = []
-    for i, (mid, sc) in enumerate(top):
+    for i, (tid, sc) in enumerate(top):
         rows.append({
             "session_id": session_id,
-            "movie_id": mid,
+            "spotify_track_id": tid,
             "score": float(sc),
             "model": model,
-            "phase": phase,
-            "rank": i+1,
-            "display_order": None
+            "batch": batch,
+            "rank": i + 1,
+            "display_order": None,
         })
-    logger.info(f"Created {len(rows)} recommendation rows for model {model}")
+    logger.info(f"Created {len(rows)} rows for model {model}")
     return rows
 
 def upsert_rows(rows: List[Dict]):
-    if rows:
-        try:
-            logger.info(f"Upserting {len(rows)} recommendation rows to database")
-            # Delete existing recommendations for this session/model/phase before inserting new ones
-            if rows:
-                session_id = rows[0]["session_id"]
-                model = rows[0]["model"]
-                phase = rows[0]["phase"]
-                sb.table("recommendations").delete().eq("session_id", session_id).eq("model", model).eq("phase", phase).execute()
-                logger.info(f"Deleted existing {model} recommendations for session {session_id}")
+    if not rows:
+        return
+    try:
+        session_id, model, batch = rows[0]["session_id"], rows[0]["model"], rows[0]["batch"]
+        logger.info(f"Upserting {len(rows)} rows for ({session_id}, {model}, batch={batch})")
+        sb.table("music_recommendations").delete() \
+            .eq("session_id", session_id).eq("model", model).eq("batch", batch).execute()
+        sb.table("music_recommendations").insert(rows).execute()
+        logger.info("Rows inserted successfully")
+    except Exception as e:
+        logger.error(f"Failed to upsert rows: {e}")
+        raise
 
-            # Now insert the new rows
-            sb.table("recommendations").insert(rows).execute()
-            logger.info("Recommendation rows inserted successfully")
-        except Exception as e:
-            logger.error(f"Failed to upsert recommendation rows: {e}")
-            raise
+# ===================== Display order =====================
+def build_display_sequence(tallrec_top: List[Tuple[str, float]],
+                           knn_top: List[Tuple[str, float]],
+                           per_model: int = 10) -> List[Tuple[str, str, int]]:
+    """Interleave the two ranked lists into 2*per_model display slots.
+
+    - Starting model is chosen at random, then turns strictly alternate.
+    - On each turn, the model contributes its highest-ranked track not shown
+      yet (duplicates across models are skipped -> the top-20 pools serve as backup).
+    - If one pool is exhausted, the other fills the remaining slots.
+    Returns [(model, spotify_track_id, display_order 1..2*per_model)].
+    """
+    lists = {"tallrec": [t for t, _ in tallrec_top], "item_knn": [t for t, _ in knn_top]}
+    idx = {"tallrec": 0, "item_knn": 0}
+    taken = {"tallrec": 0, "item_knn": 0}
+    used = set()
+    seq: List[Tuple[str, str, int]] = []
+    total = 2 * per_model
+
+    turn = random.choice(["tallrec", "item_knn"])
+    logger.info(f"Building display sequence starting with {turn}")
+
+    while len(seq) < total:
+        other = "item_knn" if turn == "tallrec" else "tallrec"
+        cur = turn if taken[turn] < per_model else other  # fill from the other side if quota met
+        lst = lists[cur]
+        while idx[cur] < len(lst) and lst[idx[cur]] in used:
+            idx[cur] += 1  # skip tracks already displayed
+        if idx[cur] < len(lst):
+            tid = lst[idx[cur]]
+            seq.append((cur, tid, len(seq) + 1))
+            used.add(tid)
+            taken[cur] += 1
+            idx[cur] += 1
+        elif idx[other] >= len(lists[other]):
+            break  # both pools exhausted
+        turn = other
+
+    logger.info(f"Display sequence: {len(seq)} tracks "
+                f"(tallrec={taken['tallrec']}, item_knn={taken['item_knn']})")
+    return seq
 
 # ===================== API =====================
 class RecReq(BaseModel):
     session_id: str
-    topk_per_model: int = 10
-    phase: int = 2
+    batch: int = 1
+    pool_per_model: int = 20               # internal top-K per model (backup for duplicate skipping)
+    display_per_model: int = 10            # displayed items per model (total = 2x)
+    rerank_pool: Optional[int] = None      # kNN top-N that TALLRec reranks (default: env TALLREC_RERANK_POOL)
 
-# Global initialization state
 READY = {"ok": False, "msg": "booting"}
 
 def _heavy_init():
-    """Initialize all heavy models in background thread"""
+    """Initialize models in a background thread; serve kNN-only until TALLRec is up."""
     try:
         logger.info("Starting heavy initialization...")
-
-        # ENV Validity check
         required = ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"]
         missing = [k for k in required if not os.getenv(k)]
         if missing:
             raise RuntimeError(f"Missing env: {', '.join(missing)}")
-        logger.info("Environment variables validated")
 
-        # Mark as ready FIRST with limited functionality
-        # This prevents Cloud Run from killing the instance
-        READY.update(ok=True, msg="ready_basic")
-        logger.info("Basic initialization complete, service is ready")
+        load_catalog()
+        load_knn_assets()
+        READY.update(ok=True, msg="ready_basic")   # kNN-only capability
+        logger.info("Basic initialization complete (catalog + item-kNN)")
 
-        logger.info("Loading Surprise SVD assets (critical)...")
-        load_surprise_assets()
-        logger.info("Surprise SVD assets loaded")
-
-        logger.info("Loading datamaps (critical)...")
-        load_datamaps()
-        logger.info("Datamaps loaded")
-
-        logger.info("Loading P5 tokenizer...")
-        load_tokenizer_once()
-        logger.info("P5 tokenizer loaded")
-
-        logger.info("Loading P5 base state...")
-        load_base_state_once()
-        logger.info("P5 base state loaded")
-
+        logger.info("Loading TALLRec (heavy)...")
+        load_tallrec_once()
         READY.update(ok=True, msg="ready_full")
         logger.info("Full initialization completed successfully")
-
     except Exception as e:
-        error_msg = f"init_error: {e}"
-        READY.update(ok=False, msg=error_msg)
+        READY.update(ok=READY["ok"], msg=f"init_error: {e}")
         logger.error(f"Heavy initialization failed: {e}")
         import traceback
         logger.error(traceback.format_exc())
@@ -609,148 +424,109 @@ def _heavy_init():
 @app.on_event("startup")
 def _startup():
     logger.info("FastAPI startup event triggered")
-    logger.info(f"Starting background initialization thread")
     threading.Thread(target=_heavy_init, daemon=True).start()
 
 @app.get("/health")
 def health():
-    logger.info(f"Health check requested - Status: {READY['msg']}")
     return {
         "ok": READY["ok"],
         "status": READY["msg"],
         "device": DEVICE,
-        "p5_ckpt": P5_CKPT,
-        "svd_dir": SVD_DIR,
-        "n_items": int(SURPRISE_BASE_RATINGS["item"].nunique() if SURPRISE_BASE_RATINGS is not None else 0)
+        "knn_dir": KNN_DIR,
+        "tallrec_lora": TALLREC_LORA,
+        "tallrec_rerank_pool": TALLREC_RERANK_POOL,
+        "n_items": int(len(SPOTIFY2META)),
     }
 
 @app.post("/recommend")
 def recommend(req: RecReq, x_webhook_secret: Optional[str] = Header(None)):
-    logger.info(f"Recommendation request received for session {req.session_id}")
-    logger.info(f"Service status: {READY['msg']}")
+    logger.info(f"Recommendation request for session {req.session_id} (status={READY['msg']})")
 
     if not READY["ok"]:
-        logger.warning(f"Service not ready: {READY['msg']}")
         raise HTTPException(503, "warming up")
-
     if WEBHOOK_SECRET and x_webhook_secret != WEBHOOK_SECRET:
-        logger.warning("Invalid webhook secret provided")
         raise HTTPException(401, "bad secret")
 
-    # Check if we have full P5 capabilities
-    use_p5 = (READY["msg"] == "ready_full" and TOKENIZER is not None and BASE_STATE is not None)
-    if not use_p5:
-        logger.warning("P5 model not fully loaded, will use SVD-only recommendations")
+    use_tallrec = (READY["msg"] == "ready_full" and TALLREC_MODEL is not None)
+    if not use_tallrec:
+        logger.warning("TALLRec not fully loaded, will use kNN-only recommendations")
 
     try:
         # 1) Input acquisition
         logger.info("Step 1: Acquiring input data")
         hist = get_history(req.session_id)
         if not hist:
-            logger.error(f"No rating history found for session {req.session_id}")
             raise HTTPException(400, "No rating history for the given session_id.")
 
-        # Get Phase 1 movies to exclude from recommendations
-        phase1_movies = get_phase1_movies(req.session_id)
-        logger.info(f"Excluding {len(phase1_movies)} Phase 1 movies from recommendations")
+        rated = get_rated_ids(req.session_id)
+        candidates = get_candidates(exclude_ids=rated)
+        if not candidates:
+            raise HTTPException(400, "No candidates left after excluding rated tracks.")
 
-        all_candidates = get_candidates(exclude_movies=phase1_movies)
-        if not all_candidates:
-            logger.error("No candidates found in phase2_movies after exclusions")
-            raise HTTPException(400, "No candidates found for phase2_movies after excluding Phase 1 movies.")
+        # 2) item-kNN: score ALL candidates, keep internal top pool
+        logger.info("Step 2: Computing item-kNN recommendations")
+        t_knn = time.time()
+        knn_scored = score_candidates_knn(hist, candidates)   # sorted desc
+        knn_rows = rows_from_scored(req.session_id, "item_knn", knn_scored,
+                                    topk=req.pool_per_model, batch=req.batch)
+        knn_secs = time.time() - t_knn
 
-        # 2) SVD Top-100 Scores
-        logger.info("Step 2: Computing SVD recommendations")
-        svd_scored_all = score_candidates_svd_surprise(req.session_id, hist, all_candidates)
-        svd_top100 = sorted(svd_scored_all, key=lambda x: x[1], reverse=True)[:100]
-        svd_rows = rows_from_scored(req.session_id, "svd", svd_top100, topk=req.topk_per_model, phase=req.phase)
-        logger.info(f"SVD generated {len(svd_top100)} scored candidates")
-
-        # 3) P5 soft prompt: create per-user base + attach adapter + short finetuning
-        p5_rows = []
-        if use_p5:
+        # 3) TALLRec: rerank only the kNN top-N (cascade, 30s latency budget)
+        tallrec_rows, tallrec_secs = [], 0.0
+        if use_tallrec:
             try:
-                logger.info("Step 3: Preparing P5 model")
-                hist_mapped = map_history_for_p5(hist, max_n=HISTORY_MAX_TRAIN)
-                logger.info(f"Mapped {len(hist_mapped)} history items for P5")
-
-                base = create_per_request_base()
-                base.eval()
-
-                # 4) P5: Rerank only SVD Top-100 (Using trained per_user model)
-                logger.info("Step 4: P5 reranking of SVD top candidates")
-                pairs = []  # [(ext_mid, internal_id)]
-                for ext_mid, _ in svd_top100:
-                    internal = map_movie_for_p5(ext_mid)
-                    if internal is not None:
-                        pairs.append((ext_mid, internal))
-
-                if pairs:
-                    mapped_ids = [internal for _, internal in pairs]
-                    p5_scores = p5_score_candidates_mapped(base, TOKENIZER, req.session_id, hist_mapped, mapped_ids)
-                    # Pair score with external movie_id
-                    p5_scored_on_100 = [(ext_mid, float(sc)) for (ext_mid, _), sc in zip(pairs, p5_scores)]
-                else:
-                    logger.warning("No movies could be mapped for P5 scoring")
-                    p5_scored_on_100 = []
-
-                p5_rows = rows_from_scored(req.session_id, "p5", p5_scored_on_100, topk=req.topk_per_model, phase=req.phase)
+                n_rerank = req.rerank_pool or TALLREC_RERANK_POOL
+                rerank_ids = [tid for tid, _ in knn_scored[:n_rerank]]
+                logger.info(f"Step 3: TALLRec reranking kNN top-{len(rerank_ids)}")
+                t_tal = time.time()
+                tallrec_scored = score_candidates_tallrec(hist, rerank_ids)
+                tallrec_secs = time.time() - t_tal
+                logger.info(f"TALLRec rerank took {tallrec_secs:.1f}s "
+                            f"({len(rerank_ids) / max(tallrec_secs, 1e-9):.1f} samples/sec)")
+                tallrec_rows = rows_from_scored(req.session_id, "tallrec", tallrec_scored,
+                                                topk=req.pool_per_model, batch=req.batch)
             except Exception as e:
-                logger.error(f"P5 processing failed, continuing with SVD only: {e}")
+                logger.error(f"TALLRec processing failed, continuing with kNN only: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
-                p5_rows = []
+                tallrec_rows = []
+
+        # 4) Display order (interleaved, random start, duplicate skipping)
+        logger.info("Step 4: Building display sequence")
+        knn_pool = [(r["spotify_track_id"], r["score"]) for r in sorted(knn_rows, key=lambda x: x["rank"])]
+        if tallrec_rows:
+            tallrec_pool = [(r["spotify_track_id"], r["score"]) for r in sorted(tallrec_rows, key=lambda x: x["rank"])]
+            display_seq = build_display_sequence(tallrec_pool, knn_pool, per_model=req.display_per_model)
         else:
-            logger.info("Step 3-4: Skipping P5 processing (model not available)")
+            display_seq = [("item_knn", tid, i + 1)
+                           for i, (tid, _) in enumerate(knn_pool[:req.display_per_model])]
 
-        # 5) Display order
-        logger.info("Step 5: Building display sequence")
-        if p5_rows:
-            # Pass all 10 movies from each model to build_display_sequence
-            p5_top_pairs = [(r["movie_id"], r["score"]) for r in sorted(p5_rows, key=lambda x:x["rank"])][:10]
-            svd_top_pairs = [(r["movie_id"], r["score"]) for r in sorted(svd_rows, key=lambda x:x["rank"])][:10]
-            display_seq = build_display_sequence(p5_top_pairs, svd_top_pairs)
-        else:
-            # SVD-only: just use top 10 SVD results
-            svd_top_pairs = [(r["movie_id"], r["score"]) for r in sorted(svd_rows, key=lambda x:x["rank"])][:10]
-            display_seq = [("svd", mid, i+1) for i, (mid, _) in enumerate(svd_top_pairs)]
+        # 5) Apply display order
+        logger.info("Step 5: Applying display order")
+        disp_map = {(m, tid): order for (m, tid, order) in display_seq}
+        for r in tallrec_rows:
+            r["display_order"] = disp_map.get(("tallrec", r["spotify_track_id"]))
+        for r in knn_rows:
+            r["display_order"] = disp_map.get(("item_knn", r["spotify_track_id"]))
+        n_displayed = sum(1 for r in (tallrec_rows + knn_rows) if r.get("display_order") is not None)
+        logger.info(f"Assigned display_order to {n_displayed} tracks")
 
-        # 6) Reflect display order
-        logger.info("Step 6: Applying display order")
-        disp_map = {(m, mid): order for (m, mid, order) in display_seq}
-
-        # Apply display_order to the movies in the display sequence
-        if p5_rows:
-            for r in p5_rows:
-                key = ("p5", r["movie_id"])
-                if key in disp_map:
-                    r["display_order"] = disp_map[key]
-        for r in svd_rows:
-            key = ("svd", r["movie_id"])
-            if key in disp_map:
-                r["display_order"] = disp_map[key]
-
-        # Count how many movies got display_order
-        movies_with_display_order = sum(1 for r in (p5_rows + svd_rows) if r.get("display_order") is not None)
-        logger.info(f"Assigned display_order to {movies_with_display_order} movies from the interleaved sequence")
-
-        # 7) upsert
-        logger.info("Step 7: Saving recommendations to database")
-        if p5_rows:
-            upsert_rows(p5_rows)
-        upsert_rows(svd_rows)
+        # 6) Persist
+        logger.info("Step 6: Saving recommendations to database")
+        if tallrec_rows:
+            upsert_rows(tallrec_rows)
+        upsert_rows(knn_rows)
 
         result = {
             "session_id": req.session_id,
-            "phase": req.phase,
-            "svd_top_saved": len(svd_rows),    # 10
-            "p5_top_saved": len(p5_rows),      # 10
-            "svd_top100_size": len(svd_top100),
-            "display_sequence": display_seq
+            "batch": req.batch,
+            "tallrec_saved": len(tallrec_rows),
+            "knn_saved": len(knn_rows),
+            "displayed": n_displayed,
+            "display_sequence": display_seq,
+            "timing": {"knn_secs": round(knn_secs, 2), "tallrec_secs": round(tallrec_secs, 2)},
         }
-        
-        logger.info(f"Recommendation generation completed successfully for session {req.session_id}")
-        logger.info(f"Result: {result}")
+        logger.info(f"Recommendation generation completed for session {req.session_id}")
         return result
 
     except HTTPException:
