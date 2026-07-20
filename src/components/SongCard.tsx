@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Song } from '../types';
 import { Play, Pause, ThumbsUp, ThumbsDown, AlertTriangle } from 'lucide-react';
+import { requestPlayback, releasePlayback } from '../lib/audioManager';
 
 interface SongCardProps {
   song: Song;
@@ -59,7 +60,10 @@ export const SongCard: React.FC<SongCardProps> = ({
     };
 
     const handleLoadedMetadata = () => setDuration(audio.duration);
-    const handleEnded = () => setIsPlaying(false);
+    const handleEnded = () => {
+      releasePlayback(audio);
+      setIsPlaying(false);
+    };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
@@ -69,7 +73,13 @@ export const SongCard: React.FC<SongCardProps> = ({
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('ended', handleEnded);
+      audio.pause();
+      releasePlayback(audio);
     };
+  }, []);
+
+  const handleExternalStop = useCallback(() => {
+    setIsPlaying(false);
   }, []);
 
   const togglePlay = () => {
@@ -78,11 +88,13 @@ export const SongCard: React.FC<SongCardProps> = ({
 
     if (isPlaying) {
       audio.pause();
+      releasePlayback(audio);
+      setIsPlaying(false);
     } else {
       lastTimeRef.current = audio.currentTime;
-      audio.play();
+      requestPlayback(audio, handleExternalStop);
+      setIsPlaying(true);
     }
-    setIsPlaying(!isPlaying);
   };
 
   const handleLike = () => {
