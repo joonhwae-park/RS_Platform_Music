@@ -280,18 +280,17 @@ def score_candidates_tallrec(history: List[Dict], cand_ids: List[str]) -> List[T
 
 # ===================== Supabase I/O =====================
 def get_history(session_id: str, limit: int = 100) -> List[Dict]:
-    """Phase-1 binary ratings for the session (attention checks excluded)."""
+    """Phase-1 binary ratings for the session."""
     try:
         logger.info(f"Fetching phase-1 ratings for session {session_id}")
         r = sb.table("song_ratings") \
-            .select("spotify_track_id,rating,is_attention_check,created_at") \
+            .select("spotify_track_id,rating,created_at") \
             .eq("session_id", session_id) \
             .eq("phase", 1) \
             .order("created_at", desc=False) \
             .limit(limit).execute()
-        rows = r.data or []
-        history = [x for x in rows if not x.get("is_attention_check")]
-        logger.info(f"Retrieved {len(rows)} rows ({len(history)} usable after excluding attention checks)")
+        history = r.data or []
+        logger.info(f"Retrieved {len(history)} phase-1 ratings")
         return history
     except Exception as e:
         logger.error(f"Failed to fetch history for session {session_id}: {e}")
