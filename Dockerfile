@@ -27,6 +27,22 @@ RUN micromamba run -n tallrec pip install --no-cache-dir \
       bitsandbytes==0.42.0 \
       "peft @ git+https://github.com/huggingface/peft.git@e536616888d51b453ed354a6f1e243fecb02ea08"
 
+# bitsandbytes' CUDA binary (libbitsandbytes_cuda118.so) links against CUDA
+# runtime libs (libcudart / libcusparse / libcublas) that the pip torch wheel
+# bundles inside site-packages. Cloud Run injects only the GPU *driver*, so
+# register those bundled lib dirs with ldconfig, then verify at BUILD time
+# that every dependency of the bnb binary resolves (fail the build otherwise).
+RUN micromamba run -n tallrec python -c "\
+import glob, os, site; sp = site.getsitepackages()[0]; \
+pats = ['torch/lib/lib*.so*', 'nvidia/*/lib/lib*.so*']; \
+dirs = sorted({os.path.dirname(p) for pat in pats for p in glob.glob(os.path.join(sp, pat))}); \
+open('/etc/ld.so.conf.d/torch-cuda.conf', 'w').write('\n'.join(dirs) + '\n'); \
+print('registered lib dirs:', dirs)" && \
+    ldconfig && \
+    BNB_SO=$(find /opt/conda/envs/tallrec -name libbitsandbytes_cuda118.so | head -1) && \
+    echo "checking $BNB_SO" && ldd "$BNB_SO" && \
+    if ldd "$BNB_SO" | grep -q "not found"; then echo "ERROR: unresolved libs for bitsandbytes"; exit 1; fi
+
 WORKDIR /workspace
 COPY app.py /workspace/app.py
 
