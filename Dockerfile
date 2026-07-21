@@ -25,6 +25,7 @@ RUN micromamba run -n tallrec python -m pip install --upgrade pip && \
 RUN micromamba run -n tallrec pip install --no-cache-dir \
       accelerate==0.26.1 \
       bitsandbytes==0.42.0 \
+      nvidia-cusparse-cu11==11.7.4.91 \
       "peft @ git+https://github.com/huggingface/peft.git@e536616888d51b453ed354a6f1e243fecb02ea08"
 
 # bitsandbytes' CUDA binary (libbitsandbytes_cuda118.so) links against CUDA
