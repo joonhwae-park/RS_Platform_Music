@@ -22,10 +22,13 @@ export const IntroScreen: React.FC<IntroScreenProps> = ({ onStart }) => {
 
           <div className="bg-teal-500 bg-opacity-10 border border-teal-500 rounded-xl p-6 mb-8 max-w-3xl mx-auto">
             <h3 className="text-teal-400 font-semibold text-lg mb-3">Important Notice</h3>
-            <p className="text-gray-300 leading-relaxed">
+            <p className="text-gray-300 leading-relaxed mb-3">
               You will listen to 30-second previews of songs and indicate whether you like or dislike them.
               You must listen to at least <span className="font-bold text-teal-200">15 seconds</span> before rating.
               Providing honest ratings will lead to more accurate recommendations.
+            </p>
+            <p className="text-gray-300 leading-relaxed">
+              Upon completion of this study, we will conduct a lottery in which the winner will receive a voucher to purchase the album containing their highest-rated recommended song as a reward.
             </p>
           </div>
         </div>

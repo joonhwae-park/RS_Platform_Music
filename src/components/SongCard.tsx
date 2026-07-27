@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Song } from '../types';
-import { Play, Pause, ThumbsUp, ThumbsDown, AlertTriangle } from 'lucide-react';
+import { Play, Pause, ThumbsUp, ThumbsDown, AlertTriangle, Info } from 'lucide-react';
 import { requestPlayback, releasePlayback } from '../lib/audioManager';
 
 interface SongCardProps {
@@ -212,18 +212,21 @@ export const SongCard: React.FC<SongCardProps> = ({
           <div className="space-y-3 border-t border-gray-800 pt-4">
             <BinaryQuestion
               label="Do you find this song recommendation diverse?"
+              tooltip="Diversity: How different is this recommended song from other songs in the list?"
               value={diversityRating}
               onChange={onDiversityChange!}
               disabled={!hasListened15s}
             />
             <BinaryQuestion
               label="Do you find this song recommendation novel?"
+              tooltip="Novelty: How new or fresh is this song to you?"
               value={noveltyRating}
               onChange={onNoveltyChange!}
               disabled={!hasListened15s}
             />
             <BinaryQuestion
               label="Do you find this song recommendation serendipitous?"
+              tooltip="Serendipity: How pleasantly surprising or unexpected is this recommended song for you?"
               value={serendipityRating}
               onChange={onSerendipityChange!}
               disabled={!hasListened15s}
@@ -239,14 +242,27 @@ export const SongCard: React.FC<SongCardProps> = ({
 
 interface BinaryQuestionProps {
   label: string;
+  tooltip?: string;
   value: number;
   onChange: (value: number) => void;
   disabled: boolean;
 }
 
-const BinaryQuestion: React.FC<BinaryQuestionProps> = ({ label, value, onChange, disabled }) => (
+const BinaryQuestion: React.FC<BinaryQuestionProps> = ({ label, tooltip, value, onChange, disabled }) => (
   <div>
-    <p className="text-gray-300 text-sm mb-2">{label}</p>
+    <div className="flex items-center gap-1.5 mb-2">
+      <p className="text-gray-300 text-sm">{label}</p>
+      {tooltip && (
+        <span className="relative group">
+          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-700 text-gray-400 text-xs cursor-help hover:bg-gray-600 hover:text-white transition-colors">
+            <Info size={10} />
+          </span>
+          <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 px-3 py-2 bg-gray-700 text-gray-100 text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none z-10">
+            {tooltip}
+          </span>
+        </span>
+      )}
+    </div>
     <div className="flex gap-3">
       <button
         onClick={() => !disabled && onChange(1)}
