@@ -153,27 +153,20 @@ function App() {
         return;
       }
 
-      // Fresh selection: fetch all songs from audio_list and stratified-sample 20 by release decade
+      // Fresh selection: fetch all songs from audio_list
       const { data: allSongs, error: fetchErr } = await supabase
         .from('audio_list')
-        .select('spotify_track_id, music4all_id, song, artist, album_name, rating_count, release');
+        .select('spotify_track_id, music4all_id, song, artist, album_name, rating_count, release, top_voted, high_vote_variance');
       if (fetchErr) throw fetchErr;
       if (!allSongs || allSongs.length === 0) {
         setErrorMsg('No songs available in the catalog.');
         return;
       }
 
-      // Stratify by release year
-      const strata: { pool: typeof allSongs; target: number }[] = [
-        { pool: allSongs.filter(s => (s.release ?? 0) >= 2010), target: 6 },
-        { pool: allSongs.filter(s => (s.release ?? 0) >= 2000 && (s.release ?? 0) <= 2009), target: 6 },
-        { pool: allSongs.filter(s => (s.release ?? 0) >= 1990 && (s.release ?? 0) <= 1999), target: 5 },
-        { pool: allSongs.filter(s => (s.release ?? 0) <= 1989), target: 3 },
-      ];
-
-      const weightedSample = (pool: typeof allSongs, n: number) => {
+      const weightedSample = (pool: typeof allSongs, n: number, exclude: Set<string>) => {
+        const eligible = pool.filter(s => !exclude.has(s.spotify_track_id));
         const result: typeof allSongs = [];
-        const remaining = [...pool];
+        const remaining = [...eligible];
         const count = Math.min(n, remaining.length);
         for (let i = 0; i < count; i++) {
           const totalWeight = remaining.reduce((sum, s) => sum + (s.rating_count || 1), 0);
@@ -189,7 +182,32 @@ function App() {
         return result;
       };
 
-      const selected = strata.flatMap(s => weightedSample(s.pool, s.target));
+      const usedIds = new Set<string>();
+
+      // 5 items where top_voted = 1, weighted by rating_count
+      const topVotedPool = allSongs.filter(s => s.top_voted === 1);
+      const topVotedPicks = weightedSample(topVotedPool, 5, usedIds);
+      topVotedPicks.forEach(s => usedIds.add(s.spotify_track_id));
+
+      // 5 items where high_vote_variance = 1, weighted by rating_count
+      const highVariancePool = allSongs.filter(s => s.high_vote_variance === 1);
+      const highVariancePicks = weightedSample(highVariancePool, 5, usedIds);
+      highVariancePicks.forEach(s => usedIds.add(s.spotify_track_id));
+
+      // Release-year strata, weighted by rating_count
+      const yearStrata: { pool: typeof allSongs; target: number }[] = [
+        { pool: allSongs.filter(s => (s.release ?? 0) >= 2010), target: 3 },
+        { pool: allSongs.filter(s => (s.release ?? 0) >= 2000 && (s.release ?? 0) <= 2009), target: 3 },
+        { pool: allSongs.filter(s => (s.release ?? 0) >= 1990 && (s.release ?? 0) <= 1999), target: 3 },
+        { pool: allSongs.filter(s => (s.release ?? 0) <= 1989), target: 1 },
+      ];
+      const yearPicks = yearStrata.flatMap(s => {
+        const picks = weightedSample(s.pool, s.target, usedIds);
+        picks.forEach(p => usedIds.add(p.spotify_track_id));
+        return picks;
+      });
+
+      const selected = [...topVotedPicks, ...highVariancePicks, ...yearPicks];
 
       // Shuffle display order (Fisher-Yates)
       for (let i = selected.length - 1; i > 0; i--) {
