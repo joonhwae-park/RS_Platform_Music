@@ -490,6 +490,7 @@ function App() {
     recordPhaseTransition(phase, 'questionnaire');
     updateSessionPhase('questionnaire');
     setPhase('questionnaire');
+    window.scrollTo(0, 0);
   };
 
   const handleQuestionnaireComplete = async (data: QuestionnaireData) => {
