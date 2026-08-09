@@ -79,7 +79,13 @@ function App() {
     const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const { data, error } = await supabase
       .from('user_sessions')
-      .insert({ user_id: userId, phase: 'initial', start_time: new Date().toISOString() })
+      .insert({
+        user_id: userId,
+        phase: 'initial',
+        start_time: new Date().toISOString(),
+        screen_width: window.screen.width,
+        screen_height: window.screen.height
+      })
       .select()
       .single();
 
@@ -471,7 +477,7 @@ function App() {
     }
   };
 
-  const handleFinishAttempt = () => {
+  const handleFinishAttempt = async () => {
     if (phase === 'recommendation') {
       const incomplete: string[] = [];
       phase2Songs.filter(s => !s.is_attention_check).forEach(song => {
@@ -487,8 +493,8 @@ function App() {
         return;
       }
     }
-    recordPhaseTransition(phase, 'questionnaire');
-    updateSessionPhase('questionnaire');
+    await recordPhaseTransition(phase, 'questionnaire');
+    await updateSessionPhase('questionnaire');
     setPhase('questionnaire');
     window.scrollTo(0, 0);
   };
