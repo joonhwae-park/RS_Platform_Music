@@ -77,12 +77,14 @@ function App() {
 
   const initializeSession = async (): Promise<string> => {
     const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const now = new Date().toISOString();
     const { data, error } = await supabase
       .from('user_sessions')
       .insert({
         user_id: userId,
         phase: 'initial',
-        start_time: new Date().toISOString(),
+        start_time: now,
+        initial_start_time: now,
         screen_width: window.screen.width,
         screen_height: window.screen.height
       })
@@ -452,8 +454,6 @@ function App() {
     const loadStart = Date.now();
 
     try {
-      await recordPhaseTransition('choice', 'recommendation');
-
       // Trigger recommendation API
       if (sessionId && !sessionId.startsWith('local_')) {
         await recommenderService.triggerRecommendationGeneration(sessionId);
@@ -470,6 +470,7 @@ function App() {
         await loadPhase2Songs(sessionId);
       }
 
+      await recordPhaseTransition('choice', 'recommendation');
       setPhase('recommendation');
       await updateSessionPhase('recommendation');
     } finally {
