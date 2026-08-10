@@ -75,11 +75,9 @@ export const AttentionCheckScreen: React.FC<AttentionCheckScreenProps> = ({ onCo
                         >
                           {value}
                         </button>
-                        {SCALE_LABELS[value] && (
-                          <span className="text-gray-500 text-xs mt-2 text-center leading-tight">
-                            {SCALE_LABELS[value]}
-                          </span>
-                        )}
+                        <span className="text-gray-500 text-xs mt-2 text-center leading-tight h-6">
+                          {SCALE_LABELS[value] ?? '\u00A0'}
+                        </span>
                       </label>
                     ))}
                   </div>
