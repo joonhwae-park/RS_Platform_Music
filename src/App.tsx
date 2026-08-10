@@ -47,6 +47,16 @@ function App() {
   const [incompleteRatings, setIncompleteRatings] = useState<string[]>([]);
   const [isRestoringSession, setIsRestoringSession] = useState<boolean>(true);
   const [isGeneratingRecommendations, setIsGeneratingRecommendations] = useState<boolean>(false);
+  const [prolificPid, setProlificPid] = useState<string | null>(null);
+
+  // Capture Prolific PID from URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pid = params.get('PROLIFIC_PID');
+    if (pid && pid !== '{{%PROLIFIC_PID%}}') {
+      setProlificPid(pid);
+    }
+  }, []);
 
   // Restore session
   useEffect(() => {
@@ -78,6 +88,9 @@ function App() {
   const initializeSession = async (): Promise<string> => {
     const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const now = new Date().toISOString();
+    const params = new URLSearchParams(window.location.search);
+    const pid = params.get('PROLIFIC_PID');
+    const validPid = pid && pid !== '{{%PROLIFIC_PID%}}' ? pid : null;
     const { data, error } = await supabase
       .from('user_sessions')
       .insert({
@@ -86,7 +99,8 @@ function App() {
         start_time: now,
         initial_start_time: now,
         screen_width: window.screen.width,
-        screen_height: window.screen.height
+        screen_height: window.screen.height,
+        ...(validPid ? { prolific_pid: validPid } : {})
       })
       .select()
       .single();
@@ -562,7 +576,7 @@ function App() {
   }
 
   if (phase === 'questionnaire') return <QuestionnaireScreen onComplete={handleQuestionnaireComplete} />;
-  if (phase === 'complete') return <CompletionScreen totalRatings={ratings.filter(r => r.rating >= 0).length} />;
+  if (phase === 'complete') return <CompletionScreen totalRatings={ratings.filter(r => r.rating >= 0).length} prolificPid={prolificPid} />;
 
   const songsToDisplay = phase === 'recommendation' ? phase2Songs : currentSongs;
   const ratedCount = phase === 'recommendation' ? getPhase2RatedCount() : getPhase1RatedCount();

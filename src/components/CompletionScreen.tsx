@@ -1,11 +1,29 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Trophy, ThumbsUp, Heart } from 'lucide-react';
 
 interface CompletionScreenProps {
   totalRatings: number;
+  prolificPid: string | null;
 }
 
-export const CompletionScreen: React.FC<CompletionScreenProps> = ({ totalRatings }) => {
+const PROLIFIC_COMPLETION_URL = 'https://app.prolific.com/submissions/complete?cc=C1F8YAHH';
+const REDIRECT_DELAY_SECONDS = 5;
+
+export const CompletionScreen: React.FC<CompletionScreenProps> = ({ totalRatings, prolificPid }) => {
+  const [countdown, setCountdown] = useState(REDIRECT_DELAY_SECONDS);
+
+  useEffect(() => {
+    if (!prolificPid) return;
+
+    if (countdown <= 0) {
+      window.location.href = PROLIFIC_COMPLETION_URL;
+      return;
+    }
+
+    const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [prolificPid, countdown]);
+
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center p-8">
       <div className="max-w-2xl mx-auto text-center">
@@ -34,9 +52,15 @@ export const CompletionScreen: React.FC<CompletionScreenProps> = ({ totalRatings
             <Heart className="text-teal-400 mr-2" size={24} />
             <span className="text-teal-400 font-semibold text-lg">Thank You!</span>
           </div>
-          <p className="text-white text-lg text-center leading-relaxed">
-            Thank you for participating in our study! You can now close the window.
-          </p>
+          {prolificPid ? (
+            <p className="text-white text-lg text-center leading-relaxed">
+              Thank you for participating in our study! You will be redirected to Prolific in {countdown} second{countdown !== 1 ? 's' : ''}...
+            </p>
+          ) : (
+            <p className="text-white text-lg text-center leading-relaxed">
+              Thank you for participating in our study! You can now close the window.
+            </p>
+          )}
         </div>
       </div>
     </div>
