@@ -7,6 +7,7 @@ import { CompletionScreen } from './components/CompletionScreen';
 import { IntroScreen } from './components/IntroScreen';
 import { Phase2CompletionModal } from './components/Phase2CompletionModal';
 import { QuestionnaireScreen } from './components/QuestionnaireScreen';
+import { AttentionCheckScreen } from './components/AttentionCheckScreen';
 import { recommenderService } from './services/recommenderService';
 import { supabase, getAudioUrl, getAlbumImageUrl } from './lib/supabase';
 import { Music, Loader2, AlertCircle } from 'lucide-react';
@@ -336,9 +337,28 @@ function App() {
     }
   };
 
-  const handleStartFromIntro = async () => {
+  const handleStartFromIntro = () => {
+    setPhase('attention_check');
+  };
+
+  const handleAttentionCheckComplete = async (durability: number, price: number, design: number) => {
     setPhase('initial');
     const newSid = await initializeSession();
+
+    if (newSid && !newSid.startsWith('local_')) {
+      const params = new URLSearchParams(window.location.search);
+      const pid = params.get('PROLIFIC_PID');
+      const validPid = pid && pid !== '{{%PROLIFIC_PID%}}' ? pid : null;
+      await supabase.from('attention_checks').insert({
+        session_id: newSid,
+        prolific_pid: validPid,
+        pre_durability: durability,
+        pre_price: price,
+        pre_design: design,
+        pre_passed: durability === 7 && price === 1 && design === 1,
+      });
+    }
+
     await loadPhase1Songs(newSid);
   };
 
@@ -536,6 +556,10 @@ function App() {
         email: data.email || null,
       });
 
+      await supabase.from('attention_checks')
+        .update({ questionnaire_response: data.attentionCheck })
+        .eq('session_id', sessionId);
+
       await supabase.from('user_sessions')
         .update({ end_time: new Date().toISOString(), phase: 'complete' })
         .eq('id', sessionId);
@@ -564,6 +588,7 @@ function App() {
   }
 
   if (phase === 'intro') return <IntroScreen onStart={handleStartFromIntro} />;
+  if (phase === 'attention_check') return <AttentionCheckScreen onComplete={handleAttentionCheckComplete} />;
 
   if (phase === 'choice') {
     return (

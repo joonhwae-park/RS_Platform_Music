@@ -42,4 +42,4 @@ export interface Phase2Song extends Song {
   displayOrder: number;
 }
 
-export type AppPhase = 'intro' | 'initial' | 'choice' | 'recommendation' | 'questionnaire' | 'complete';
+export type AppPhase = 'intro' | 'attention_check' | 'initial' | 'choice' | 'recommendation' | 'questionnaire' | 'complete';
