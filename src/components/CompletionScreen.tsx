@@ -6,7 +6,7 @@ interface CompletionScreenProps {
   prolificPid: string | null;
 }
 
-const PROLIFIC_COMPLETION_URL = 'https://app.prolific.com/submissions/complete?cc=C1F8YAHH';
+const PROLIFIC_COMPLETION_URL = 'https://app.prolific.com/submissions/complete?cc=CAV9IN60';
 const REDIRECT_DELAY_SECONDS = 5;
 
 export const CompletionScreen: React.FC<CompletionScreenProps> = ({ totalRatings, prolificPid }) => {
