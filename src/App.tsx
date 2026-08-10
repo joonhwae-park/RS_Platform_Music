@@ -376,27 +376,13 @@ function App() {
     // Save to database
     if (sessionId && !sessionId.startsWith('local_')) {
       const currentPhase = phase === 'recommendation' ? 2 : 1;
-      const { data: existingRows } = await supabase
-        .from('song_ratings')
-        .select('id')
-        .eq('session_id', sessionId)
-        .eq('spotify_track_id', trackId)
-        .eq('phase', currentPhase)
-        .limit(1);
-
-      if (existingRows && existingRows.length > 0) {
-        await supabase.from('song_ratings')
-          .update({ rating, listened_duration: listenedDuration })
-          .eq('id', existingRows[0].id);
-      } else {
-        await supabase.from('song_ratings').insert({
-          session_id: sessionId,
-          spotify_track_id: trackId,
-          rating,
-          phase: currentPhase,
-          listened_duration: listenedDuration,
-        });
-      }
+      await supabase.rpc('upsert_song_rating', {
+        p_session_id: sessionId,
+        p_track_id: trackId,
+        p_phase: currentPhase,
+        p_rating: rating,
+        p_listened_duration: listenedDuration,
+      });
     }
     setIncompleteRatings(prev => prev.filter(id => id !== trackId));
   }, [sessionId, phase]);
@@ -417,28 +403,14 @@ function App() {
     });
 
     if (sessionId && !sessionId.startsWith('local_')) {
-      const col = `${type}_rating`;
-      const { data: existingRows } = await supabase
-        .from('song_ratings')
-        .select('id')
-        .eq('session_id', sessionId)
-        .eq('spotify_track_id', trackId)
-        .eq('phase', 2)
-        .limit(1);
-
-      if (existingRows && existingRows.length > 0) {
-        await supabase.from('song_ratings')
-          .update({ [col]: value })
-          .eq('id', existingRows[0].id);
-      } else {
-        await supabase.from('song_ratings').insert({
-          session_id: sessionId,
-          spotify_track_id: trackId,
-          rating: -1,
-          phase: 2,
-          [col]: value,
-        });
-      }
+      await supabase.rpc('upsert_song_rating', {
+        p_session_id: sessionId,
+        p_track_id: trackId,
+        p_phase: 2,
+        p_diversity: type === 'diversity' ? value : null,
+        p_novelty: type === 'novelty' ? value : null,
+        p_serendipity: type === 'serendipity' ? value : null,
+      });
     }
     setIncompleteRatings(prev => prev.filter(id => id !== trackId));
   }, [sessionId]);
