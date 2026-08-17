@@ -499,6 +499,24 @@ function App() {
         setIncompleteRatings(incomplete);
         return;
       }
+
+      if (sessionId && !sessionId.startsWith('local_')) {
+        await Promise.all(
+          phase2Songs.filter(s => !s.is_attention_check).map(song => {
+            const r = getRating(song.spotify_track_id);
+            return supabase.rpc('upsert_song_rating', {
+              p_session_id: sessionId,
+              p_track_id: song.spotify_track_id,
+              p_phase: 2,
+              p_rating: r.rating,
+              p_listened_duration: r.listenedDuration ?? null,
+              p_diversity: r.diversity ?? null,
+              p_novelty: r.novelty ?? null,
+              p_serendipity: r.serendipity ?? null,
+            });
+          })
+        );
+      }
     }
     await recordPhaseTransition(phase, 'questionnaire');
     await updateSessionPhase('questionnaire');
