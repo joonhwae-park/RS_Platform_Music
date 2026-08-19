@@ -450,6 +450,21 @@ function App() {
   };
 
   const handleProceedToChoice = async () => {
+    if (sessionId && !sessionId.startsWith('local_')) {
+      await Promise.all(
+        currentSongs.map(song => {
+          const r = getRating(song.spotify_track_id);
+          if (r.rating < 0) return Promise.resolve();
+          return supabase.rpc('upsert_song_rating', {
+            p_session_id: sessionId,
+            p_track_id: song.spotify_track_id,
+            p_phase: 1,
+            p_rating: r.rating,
+            p_listened_duration: r.listenedDuration ?? null,
+          });
+        })
+      );
+    }
     await recordPhaseTransition('initial', 'choice');
     await updateSessionPhase('choice');
     setPhase('choice');
